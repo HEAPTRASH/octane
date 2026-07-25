@@ -35,17 +35,21 @@
 pub mod app;
 pub mod approval;
 pub mod banner;
+pub mod completion;
 pub mod composer;
 pub mod glyphs;
 pub mod keymap;
 pub mod render;
 pub mod status;
 pub mod theme;
+pub mod transcript;
 
 pub use app::{App, AppEvent};
 pub use approval::{ApprovalPrompt, ApprovalReply, TuiApprover};
+pub use completion::{Candidate, Completion};
 pub use composer::{Composer, Submission};
 pub use keymap::{KeyAction, KeyContext};
 pub use glyphs::Glyphs;
 pub use status::StatusLine;
 pub use theme::{ColorDepth, Theme};
+pub use transcript::Transcript;

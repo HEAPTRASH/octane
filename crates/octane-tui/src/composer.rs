@@ -143,6 +143,59 @@ impl Composer {
             .unwrap_or(self.text.len());
     }
 
+    /// Whether the draft ends with a lone backslash.
+    ///
+    /// The portable newline escape hatch: no terminal support required, and it
+    /// is the shell continuation people already know.
+    pub fn ends_with_continuation(&self) -> bool {
+        self.text.ends_with('\\') && !self.text.ends_with("\\\\")
+    }
+
+    /// Turn a trailing backslash into a newline.
+    pub fn continue_line(&mut self) {
+        if !self.ends_with_continuation() {
+            return;
+        }
+        let backslash = self.text.len() - 1;
+        self.text.replace_range(backslash.., "\n");
+        self.cursor = self.text.len();
+        self.leave_history();
+    }
+
+    /// Replace the whole buffer, e.g. when a completion is accepted.
+    pub fn set_text(&mut self, text: String, cursor: usize) {
+        self.cursor = cursor.min(text.len());
+        self.text = text;
+        self.leave_history();
+    }
+
+    /// Move up one visual line, keeping the column where possible.
+    ///
+    /// Needed because up-arrow browses history only from the first line; without
+    /// this a multi-line draft cannot be navigated above its last line.
+    pub fn move_up(&mut self) {
+        let (line, column) = self.cursor_position();
+        if line == 0 {
+            return;
+        }
+
+        let start_of_current = self.text[..self.cursor].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let start_of_previous = self.text[..start_of_current.saturating_sub(1)]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+
+        let previous_line = &self.text[start_of_previous..start_of_current.saturating_sub(1)];
+        // Clamp to the shorter line rather than overshooting into the next one.
+        let target = previous_line
+            .char_indices()
+            .nth(column)
+            .map(|(index, _)| start_of_previous + index)
+            .unwrap_or(start_of_previous + previous_line.len());
+
+        self.cursor = target;
+    }
+
     /// Ctrl+U — clear the line, as in readline.
     pub fn clear(&mut self) {
         self.text.clear();
@@ -443,6 +496,71 @@ mod tests {
             composer.submit();
         }
         assert_eq!(composer.history(), &["cargo test".to_string()]);
+    }
+
+    #[test]
+    fn a_trailing_backslash_becomes_a_newline() {
+        let mut composer = typed("first line\\");
+        assert!(composer.ends_with_continuation());
+
+        composer.continue_line();
+        assert_eq!(composer.lines(), vec!["first line", ""]);
+        // The backslash itself must not survive into the message.
+        assert!(!composer.text().contains('\\'));
+    }
+
+    #[test]
+    fn an_escaped_backslash_is_not_a_continuation() {
+        // `C:\\path\\\\` should send, not continue.
+        assert!(!typed("path\\\\").ends_with_continuation());
+        assert!(!typed("no trailing slash").ends_with_continuation());
+    }
+
+    #[test]
+    fn set_text_replaces_the_buffer_and_places_the_caret() {
+        let mut composer = typed("@ma");
+        composer.set_text("@src/main.rs ".into(), 13);
+        assert_eq!(composer.text(), "@src/main.rs ");
+        assert_eq!(composer.cursor(), 13);
+    }
+
+    #[test]
+    fn set_text_clamps_an_out_of_range_caret() {
+        let mut composer = Composer::new();
+        composer.set_text("short".into(), 999);
+        assert_eq!(composer.cursor(), 5);
+    }
+
+    #[test]
+    fn move_up_navigates_a_multiline_draft() {
+        let mut composer = Composer::new();
+        composer.insert_str("first line");
+        composer.newline();
+        composer.insert_str("second");
+
+        assert_eq!(composer.cursor_position(), (1, 6));
+        composer.move_up();
+        assert_eq!(composer.cursor_position(), (0, 6));
+    }
+
+    #[test]
+    fn move_up_clamps_to_a_shorter_line_above() {
+        let mut composer = Composer::new();
+        composer.insert_str("ab");
+        composer.newline();
+        composer.insert_str("much longer line");
+
+        composer.move_up();
+        // Column 16 does not exist on a 2-character line.
+        assert_eq!(composer.cursor_position(), (0, 2));
+    }
+
+    #[test]
+    fn move_up_from_the_first_line_does_nothing() {
+        let mut composer = typed("only line");
+        let before = composer.cursor();
+        composer.move_up();
+        assert_eq!(composer.cursor(), before);
     }
 
     #[test]

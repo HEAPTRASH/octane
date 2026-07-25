@@ -253,43 +253,21 @@ async fn interactive(
     model: Option<&str>,
 ) -> Result<()> {
     use octane_protocol::{Item, ItemId, ItemKind, ItemStatus, ToolCallId, TurnId};
-    use octane_tui::{App, AppEvent, StatusLine, Submission};
+    use octane_tui::{App, AppEvent, Candidate, StatusLine, Submission};
 
     let contained = sandbox.is_contained();
 
-    // Logo, tagline, and hints go to stdout *before* the inline viewport starts,
-    // so they land in real scrollback and scroll away naturally as the session
-    // grows. The animation has to happen here too: once content is committed to
-    // scrollback it is never redrawn.
-    let theme = octane_tui::Theme::default();
-    let glyphs = octane_tui::Glyphs::detect();
-    let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80);
-    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    let mut app = App::new(
+        StatusLine { mode, model: model.unwrap_or("unset").to_string(), ..Default::default() },
+        workspace.to_string(),
+        contained,
+    )?;
 
-    {
-        use std::io::Write;
-        let mut stdout = std::io::stdout();
-        octane_tui::banner::draw(
-            &mut stdout,
-            width,
-            &theme,
-            &glyphs,
-            octane_tui::banner::should_animate(is_tty, theme.depth),
-        )?;
-        write!(stdout, "\n{}", octane_tui::banner::tips(width, &theme, &glyphs, workspace.as_str(), contained))?;
-        stdout.flush()?;
-    }
-
-    let mut app = App::new(StatusLine {
-        mode,
-        model: model.unwrap_or("unset").to_string(),
-        glyphs,
-        ..Default::default()
-    })?;
-    // The detected set must reach the transcript too, or the fallback applies to
-    // the banner and nothing else.
-    app.options_mut().glyphs = glyphs;
-    app.options_mut().theme = theme;
+    app.set_commands(COMMANDS.iter().map(|(name, detail)| Candidate::new(*name, *detail)).collect());
+    // Walked once at startup. A watcher would keep it live, but a stale entry
+    // costs a "no such file" and a rescan costs a directory walk on every
+    // keystroke — the wrong trade for a completion list.
+    app.set_files(index_files(workspace));
 
     let completed = |kind: ItemKind| {
         octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {
@@ -312,6 +290,10 @@ async fn interactive(
                 app.push_event(&completed(ItemKind::UserMessage { text: format!("/{name}") }))?;
                 let body = match name.as_str() {
                     "help" => HELP.to_string(),
+                    "clear" => {
+                        app.clear_transcript();
+                        continue;
+                    }
                     "exit" | "quit" => break,
                     other => format!("Unknown command /{other}. Try /help."),
                 };
@@ -322,7 +304,6 @@ async fn interactive(
                 app.push_event(&completed(ItemKind::UserMessage {
                     text: format!("!{command}"),
                 }))?;
-                let output = run_shell(&command, workspace, &sandbox).await;
                 app.push_event(&completed(ItemKind::ToolExecution {
                     call_id: ToolCallId::new(),
                     name: "bash".into(),
@@ -332,13 +313,37 @@ async fn interactive(
                     })
                     .to_string(),
                 }))?;
+                let output = run_shell(&command, workspace, &sandbox).await;
                 app.push_event(&completed(ItemKind::AgentMessage { text: output }))?;
             }
 
-            AppEvent::Submit(Submission::Prompt { text, .. }) => {
+            AppEvent::Submit(Submission::Prompt { text, file_references }) => {
                 app.push_event(&completed(ItemKind::UserMessage { text }))?;
+
+                // `@path` attaches the file's contents. Extracting the paths
+                // without reading them made the affordance decorative.
+                for reference in &file_references {
+                    match attach(reference, workspace).await {
+                        Ok(attached) => {
+                            app.push_event(&completed(ItemKind::ToolExecution {
+                                call_id: ToolCallId::new(),
+                                name: "read".into(),
+                                input: serde_json::json!({ "path": reference }).to_string(),
+                            }))?;
+                            app.push_event(&completed(ItemKind::AgentMessage {
+                                text: attached,
+                            }))?;
+                        }
+                        Err(error) => {
+                            app.push_event(&completed(ItemKind::Error {
+                                message: format!("@{reference}: {error}"),
+                            }))?;
+                        }
+                    }
+                }
+
                 app.push_event(&completed(ItemKind::Error {
-                    message: "No model is wired up yet. `!command` and `/help` work."
+                    message: "No model is wired up yet. `!command`, `@path`, and `/help` work."
                         .into(),
                 }))?;
             }
@@ -349,17 +354,79 @@ async fn interactive(
     Ok(())
 }
 
-const HELP: &str = "\
-  /help              show this
-  /exit              quit
-  !<command>         run a shell command
-  @path              reference a file in a prompt
+/// Slash commands offered by completion.
+const COMMANDS: &[(&str, &str)] = &[
+    ("/help", "show the key reference"),
+    ("/clear", "clear the transcript"),
+    ("/exit", "quit octane"),
+];
 
-  shift+tab          cycle permission mode
-  shift+enter        newline
-  ctrl+u             clear the input
-  esc                interrupt while working
-  ctrl+c             exit";
+/// Walk the workspace for `@` completion candidates.
+///
+/// Bounded and gitignore-aware, so the list is files someone might mean rather
+/// than every artifact in `target/`.
+fn index_files(workspace: &Utf8PathBuf) -> Vec<String> {
+    use octane_tools::walk::{self, WalkOptions};
+
+    let options = WalkOptions { limit: 20_000, ..Default::default() };
+    walk::walk(workspace, &options, |_, is_dir| !is_dir)
+        .entries
+        .into_iter()
+        .map(|entry| walk::display_path(&entry.path, workspace))
+        .collect()
+}
+
+/// Read a referenced file, fenced with its path.
+///
+/// Goes through the `read` tool rather than `std::fs`, so an `@` reference is
+/// bounded by the same size limits and binary checks a model-issued read is.
+async fn attach(reference: &str, workspace: &Utf8PathBuf) -> Result<String> {
+    use octane_protocol::{SessionId, ToolCallId};
+    use octane_tools::{FileTracker, ReadTool, Tool, ToolContext};
+
+    let tool = ReadTool::new(std::sync::Arc::new(FileTracker::new()));
+    let ctx = ToolContext {
+        session_id: SessionId::new(),
+        call_id: ToolCallId::new(),
+        agent: "build".into(),
+        workspace: workspace.clone(),
+        cwd: workspace.clone(),
+        cancel: Default::default(),
+    };
+    let input = serde_json::json!({ "path": reference }).to_string();
+
+    // Awaited, not blocked on. `Handle::block_on` from inside the runtime panics
+    // with "cannot block the current thread from within a runtime", which takes
+    // the whole session down the first time anyone uses an `@` reference.
+    let outcome = tool
+        .execute(&input, &ctx)
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    Ok(outcome.output)
+}
+
+const HELP: &str = "\
+  input
+    /               commands, with completion
+    @path           attach a file, with fuzzy completion
+    !command        run a shell command
+    tab             accept a completion
+    shift+enter     newline (the box grows)
+    alt+enter       newline, on terminals without shift+enter
+    \\ then enter    newline, anywhere
+    ctrl+u          clear the input
+
+  transcript
+    pageup/pagedn   scroll
+    shift+up/down   scroll a little
+    ctrl+home/end   jump to top or bottom
+    mouse wheel     scroll
+
+  session
+    shift+tab       cycle permission mode
+    esc             interrupt while working
+    ctrl+c          exit";
 
 /// Run a shell command through the `bash` tool, so it gets the same containment
 /// and bounds an agent-issued command would.

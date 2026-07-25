@@ -25,14 +25,31 @@ pub enum KeyAction {
     MoveRight,
     MoveLineStart,
     MoveLineEnd,
+    MoveUp,
     HistoryPrevious,
     HistoryNext,
     Clear,
 
     Submit,
+    /// Replace a trailing backslash with a newline.
+    ContinueLine,
     CycleMode,
     Interrupt,
     Exit,
+
+    /// Move the completion highlight.
+    CompletionNext,
+    CompletionPrevious,
+    /// Insert the highlighted candidate.
+    CompletionAccept,
+    CompletionDismiss,
+
+    ScrollUp,
+    ScrollDown,
+    PageUp,
+    PageDown,
+    ScrollTop,
+    ScrollBottom,
 
     /// Settle a pending approval.
     Approve(ApprovalReply),
@@ -48,6 +65,15 @@ pub struct KeyContext<'a> {
     pub composer_empty: bool,
     /// Set when an approval is on screen.
     pub approval: Option<&'a ApprovalPrompt>,
+    /// The completion popup is open.
+    pub completing: bool,
+    /// The caret is on the first line of the draft.
+    ///
+    /// Distinguishes "browse history" from "move up a line" — without it, the up
+    /// arrow makes multi-line drafts uneditable.
+    pub on_first_line: bool,
+    /// The text ends with a backslash, the portable newline escape hatch.
+    pub ends_with_continuation: bool,
 }
 
 /// Interpret a keypress.
@@ -58,6 +84,22 @@ pub fn route(key: KeyEvent, ctx: &KeyContext<'_>) -> KeyAction {
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+    // The popup owns the arrows, tab, and enter while it is open. Anything else
+    // falls through, so typing keeps refining the query rather than being eaten.
+    if ctx.completing {
+        match key.code {
+            KeyCode::Up => return KeyAction::CompletionPrevious,
+            KeyCode::Down => return KeyAction::CompletionNext,
+            KeyCode::Tab => return KeyAction::CompletionAccept,
+            // Only a plain Enter accepts, so the newline bindings still work
+            // with the popup open.
+            KeyCode::Enter if !shift && !alt => return KeyAction::CompletionAccept,
+            KeyCode::Esc => return KeyAction::CompletionDismiss,
+            _ => {}
+        }
+    }
 
     match key.code {
         KeyCode::Char('c') if ctrl => KeyAction::Exit,
@@ -74,18 +116,42 @@ pub fn route(key: KeyEvent, ctx: &KeyContext<'_>) -> KeyAction {
 
         KeyCode::BackTab => KeyAction::CycleMode,
 
-        // Shift+Enter is the newline; plain Enter sends. The other way round
-        // means every multi-line prompt gets sent a line at a time.
-        KeyCode::Enter if shift => KeyAction::InsertNewline,
+        // Three ways to get a newline, because one is not portable.
+        //
+        // `shift+enter` is what people reach for, but most terminals send a bare
+        // CR for it — indistinguishable from Enter — unless the keyboard
+        // enhancement protocol is negotiated. It is requested at startup, so this
+        // arm fires on Kitty, Ghostty, WezTerm, foot, and recent iTerm2.
+        //
+        // `alt+enter` arrives as ESC-prefixed CR and works essentially everywhere.
+        //
+        // A trailing backslash is the last resort: it needs no terminal support
+        // at all, and it is the shell continuation people already know.
+        KeyCode::Enter if shift || alt => KeyAction::InsertNewline,
+        KeyCode::Enter if ctx.ends_with_continuation => KeyAction::ContinueLine,
         KeyCode::Enter => KeyAction::Submit,
 
         KeyCode::Backspace => KeyAction::Backspace,
         KeyCode::Delete => KeyAction::DeleteForward,
         KeyCode::Left => KeyAction::MoveLeft,
         KeyCode::Right => KeyAction::MoveRight,
+        // Guarded arms must precede their unguarded counterparts, or the
+        // modifier variant is unreachable. The compiler warns; heed it.
+        KeyCode::Home if ctrl => KeyAction::ScrollTop,
+        KeyCode::End if ctrl => KeyAction::ScrollBottom,
         KeyCode::Home => KeyAction::MoveLineStart,
         KeyCode::End => KeyAction::MoveLineEnd,
-        KeyCode::Up => KeyAction::HistoryPrevious,
+        // Scrolling the transcript, since going full screen gave up the
+        // terminal's own scrollback.
+        KeyCode::PageUp => KeyAction::PageUp,
+        KeyCode::PageDown => KeyAction::PageDown,
+        KeyCode::Up if shift => KeyAction::ScrollUp,
+        KeyCode::Down if shift => KeyAction::ScrollDown,
+
+        // Up browses history only from the first line, so it still navigates a
+        // multi-line draft.
+        KeyCode::Up if ctx.on_first_line => KeyAction::HistoryPrevious,
+        KeyCode::Up => KeyAction::MoveUp,
         KeyCode::Down => KeyAction::HistoryNext,
 
         KeyCode::Char(ch) if !ctrl => KeyAction::Insert(ch),
@@ -136,16 +202,20 @@ mod tests {
         KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL)
     }
 
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
     fn idle() -> KeyContext<'static> {
-        KeyContext { working: false, composer_empty: true, approval: None }
+        KeyContext { working: false, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
     }
 
     fn drafting() -> KeyContext<'static> {
-        KeyContext { working: false, composer_empty: false, approval: None }
+        KeyContext { working: false, composer_empty: false, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
     }
 
     fn working() -> KeyContext<'static> {
-        KeyContext { working: true, composer_empty: true, approval: None }
+        KeyContext { working: true, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
     }
 
     fn prompt(diff: Option<&str>) -> ApprovalPrompt {
@@ -154,6 +224,64 @@ mod tests {
             summary: "Write a.rs".into(),
             diff: diff.map(ToString::to_string),
         }
+    }
+
+    fn completing() -> KeyContext<'static> {
+        KeyContext {
+            working: false,
+            composer_empty: false,
+            approval: None,
+            completing: true,
+            on_first_line: true,
+            ends_with_continuation: false,
+        }
+    }
+
+    #[test]
+    fn the_popup_owns_the_arrows_tab_and_enter() {
+        let ctx = completing();
+        assert_eq!(route(key(KeyCode::Down), &ctx), KeyAction::CompletionNext);
+        assert_eq!(route(key(KeyCode::Up), &ctx), KeyAction::CompletionPrevious);
+        assert_eq!(route(key(KeyCode::Tab), &ctx), KeyAction::CompletionAccept);
+        assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::CompletionAccept);
+        assert_eq!(route(key(KeyCode::Esc), &ctx), KeyAction::CompletionDismiss);
+    }
+
+    #[test]
+    fn typing_still_refines_the_query_while_completing() {
+        // Swallowing letters would make the popup impossible to narrow.
+        assert_eq!(route(key(KeyCode::Char('x')), &completing()), KeyAction::Insert('x'));
+        assert_eq!(route(key(KeyCode::Backspace), &completing()), KeyAction::Backspace);
+    }
+
+    #[test]
+    fn shift_enter_still_makes_a_newline_while_completing() {
+        let ctx = completing();
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(route(shift_enter, &ctx), KeyAction::InsertNewline);
+    }
+
+    #[test]
+    fn the_transcript_can_be_scrolled() {
+        let ctx = idle();
+        assert_eq!(route(key(KeyCode::PageUp), &ctx), KeyAction::PageUp);
+        assert_eq!(route(key(KeyCode::PageDown), &ctx), KeyAction::PageDown);
+        assert_eq!(
+            route(KeyEvent::new(KeyCode::Up, KeyModifiers::SHIFT), &ctx),
+            KeyAction::ScrollUp
+        );
+        assert_eq!(route(ctrl_key(KeyCode::Home), &ctx), KeyAction::ScrollTop);
+        assert_eq!(route(ctrl_key(KeyCode::End), &ctx), KeyAction::ScrollBottom);
+    }
+
+    #[test]
+    fn up_browses_history_only_from_the_first_line() {
+        let first = KeyContext { on_first_line: true, ..drafting() };
+        assert_eq!(route(key(KeyCode::Up), &first), KeyAction::HistoryPrevious);
+
+        // Otherwise a multi-line draft cannot be edited above its last line.
+        let later = KeyContext { on_first_line: false, ..drafting() };
+        assert_eq!(route(key(KeyCode::Up), &later), KeyAction::MoveUp);
     }
 
     #[test]
@@ -168,6 +296,36 @@ mod tests {
             route(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT), &drafting()),
             KeyAction::InsertNewline
         );
+    }
+
+    #[test]
+    fn alt_enter_is_the_portable_newline() {
+        // Most terminals send a bare CR for shift+enter, so this is the binding
+        // that actually works without negotiating the enhancement protocol.
+        assert_eq!(
+            route(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT), &drafting()),
+            KeyAction::InsertNewline
+        );
+    }
+
+    #[test]
+    fn a_trailing_backslash_continues_the_line() {
+        let ctx = KeyContext { ends_with_continuation: true, ..drafting() };
+        assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::ContinueLine);
+
+        // And without one, Enter still sends.
+        assert_eq!(route(key(KeyCode::Enter), &drafting()), KeyAction::Submit);
+    }
+
+    #[test]
+    fn newline_bindings_survive_an_open_popup() {
+        let ctx = completing();
+        assert_eq!(
+            route(KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT), &ctx),
+            KeyAction::InsertNewline
+        );
+        // A plain Enter still accepts the highlighted candidate.
+        assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::CompletionAccept);
     }
 
     #[test]
@@ -216,7 +374,7 @@ mod tests {
     #[test]
     fn approval_shortcuts_settle_the_prompt() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
 
         assert_eq!(
             route(key(KeyCode::Char('y')), &ctx),
@@ -235,7 +393,7 @@ mod tests {
     #[test]
     fn unknown_keys_during_an_approval_start_an_instruction() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
 
         // "use the other file" begins with 'u', which is not a shortcut.
         assert_eq!(route(key(KeyCode::Char('u')), &ctx), KeyAction::Insert('u'));
@@ -244,7 +402,7 @@ mod tests {
     #[test]
     fn once_typing_has_started_shortcut_letters_are_just_letters() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
 
         // The 'n' in "run the other one" must not reject the prompt.
         assert_eq!(route(key(KeyCode::Char('n')), &ctx), KeyAction::Insert('n'));
@@ -254,14 +412,14 @@ mod tests {
     #[test]
     fn enter_with_instructions_rejects_with_them() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
         assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::RejectWithComposerText);
     }
 
     #[test]
     fn enter_on_an_empty_approval_prompt_does_not_guess() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
         assert_eq!(
             route(key(KeyCode::Enter), &ctx),
             KeyAction::None,
@@ -272,11 +430,11 @@ mod tests {
     #[test]
     fn the_diff_shortcut_is_live_only_with_a_diff() {
         let without = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&without) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&without), completing: false, on_first_line: true, ends_with_continuation: false };
         assert_eq!(route(key(KeyCode::Char('f')), &ctx), KeyAction::Insert('f'));
 
         let with = prompt(Some("+ line"));
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&with) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&with), completing: false, on_first_line: true, ends_with_continuation: false };
         assert_eq!(
             route(key(KeyCode::Char('f')), &ctx),
             KeyAction::Approve(ApprovalReply::ShowDiff)
@@ -286,7 +444,7 @@ mod tests {
     #[test]
     fn an_approval_blocks_submission_and_mode_cycling() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt) };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
         // Changing mode or sending a prompt mid-approval would be answering a
         // different question than the one on screen.
         assert_eq!(route(key(KeyCode::BackTab), &ctx), KeyAction::None);

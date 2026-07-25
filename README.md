@@ -57,17 +57,21 @@ One responsibility per crate. The dependency direction is strictly one-way — n
 
 `octane-core` coordinates and holds no domain logic. Every collaborator is a trait, which is why the loop is testable without a model, a shell, or a network — see the scripted-provider tests in `crates/octane-core/src/turn.rs`.
 
-## The TUI is scrollback, not full screen
+## The TUI
 
-The most consequential UI decision (`RESEARCH.md` §H). There are two ways to build a terminal UI: own the viewport as a cell grid (opencode, Amp), or append to scrollback and redraw only the live rows (Claude Code, Codex, pi).
+Full screen, on the alternate screen: brand header at top, transcript filling the middle, composer and status pinned to the bottom. An empty session shows the hints and a lot of deliberate negative space.
 
-Owning the viewport costs the scrollback buffer, terminal search, and sane copy/paste — all of which then have to be reimplemented, and mouse scrolling never quite feels right afterwards. A coding agent is a linear chat, which maps onto the terminal's native model exactly, so it pays that price for nothing.
+That trades away the terminal's own scrollback, search, and selection (`RESEARCH.md` §H covers the tradeoff — opencode and Amp make the same choice; Claude Code and Codex do not). `octane-tui::transcript` provides scrolling in their place, with the property that matters: **follow-tail**. New content keeps the view pinned to the bottom until you scroll up, then stops, because a pane that moves while you read it is the worst thing a log can do. Scrolling back down resumes following.
 
-So: finished content goes into real scrollback via `Terminal::insert_before`, and only a small `Viewport::Inline` region — composer, activity line, status — is redrawn. Frames are wrapped in synchronized-output escapes (`CSI ?2026h`/`l`) so the terminal presents them atomically instead of tearing.
+Everything except `app` is pure — state in, lines out — because rendering, keybinding, and completion logic is where the bugs are and it should be testable by calling a function.
 
-Everything in `octane-tui` except `app` is pure — state in, lines out — because rendering and keybinding logic is where the bugs are and it should be testable by calling a function.
+Frames are wrapped in synchronized-output escapes (`CSI ?2026h`/`l`) so terminals present them atomically instead of tearing, and the region is only redrawn when something changed. That last one is not catchable by a unit test — it renders *correctly* either way, it just repaints ~12 times a second forever. `scripts/tui-smoke.py` measures it on the wire: idle output must be ~0 bytes, not 9.6 KB/s.
 
-Two things must hold or the region visibly flickers, and neither is catchable by a unit test because both render *correctly*: the region is only redrawn when something changed, and `Terminal::resize` is only called when the size genuinely changed (it resets ratatui's buffers, discarding the cell diff). `scripts/tui-smoke.py` measures it on the wire — idle output must be ~0 bytes, not 9.6 KB/s.
+### Input
+
+`@path` attaches a file, `!command` runs a shell command, `/` opens commands. Both `@` and `/` complete as you type, with **subsequence matching** rather than prefix — `@octcli` finds `crates/octane-cli/src/main.rs`, because prefix matching would require knowing where a file lives before you can ask for it.
+
+Newlines have three bindings because one is not portable. `shift+enter` is what people reach for, but most terminals send a bare CR for it, indistinguishable from Enter, unless the keyboard enhancement protocol is negotiated — octane requests it at startup, so it works on Kitty, Ghostty, WezTerm, foot, and recent iTerm2. `alt+enter` works essentially everywhere. A trailing `\` before Enter needs no terminal support at all.
 
 ## Look and feel
 
@@ -104,7 +108,7 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 371 tests
+cargo test --workspace       # 417 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

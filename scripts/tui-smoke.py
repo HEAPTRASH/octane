@@ -94,6 +94,18 @@ def main() -> int:
     send(b"\x1b[Z")  # shift+tab
     pump(1.0)
 
+    # Completion: `@` should fuzzy-match a real file, and Tab should accept it.
+    send(b"@toolchai")
+    pump(1.5)
+    send(b"\t")
+    pump(0.8)
+
+    # Newline fallbacks, neither of which needs terminal support.
+    send(b"\x1b\r")  # alt+enter
+    pump(0.5)
+    send(b"\x15")  # ctrl+u, clear
+    pump(0.5)
+
     idle_after = pump(4.0)
     print(f"idle after activity  {idle_after:>7} bytes / 4s")
     if idle_after > IDLE_BUDGET_BYTES:
@@ -107,6 +119,9 @@ def main() -> int:
 
     # Colour lives in the escape sequences, so it has to be checked before they
     # are stripped.
+    if "\x1b[?1049h" not in raw:
+        failures.append("did not enter the alternate screen")
+
     if "38;2;149;214;0" in raw:
         print("ok    acid green #95D600")
     else:
@@ -114,6 +129,7 @@ def main() -> int:
 
     for label, needle in {
         "wordmark": "\u2588",
+        "@ completion": "rust-toolchain.toml",
         "claw mark": "\u2571\u2571\u2571",
         "hints": "shift+tab",
         "shell output": "tui-smoke-ok",

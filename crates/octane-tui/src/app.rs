@@ -3,23 +3,25 @@
 //! Everything else in this crate is pure. This module is where the terminal,
 //! async, and I/O live, deliberately concentrated in one place.
 //!
-//! # How the screen is managed
+//! # Full screen
 //!
-//! Ratatui in [`Viewport::Inline`] mode. Only the bottom few rows are ours; the
-//! rest of the terminal is untouched scrollback that the user's terminal owns,
-//! along with its scrolling, search, and selection.
+//! The alternate screen, with a fixed layout: brand header at the top, transcript
+//! filling the middle, composer and status pinned to the bottom.
 //!
-//! Finished content is pushed up with [`Terminal::insert_before`], which writes
-//! into real scrollback. Once written, it is never redrawn — which is also why
-//! the renderer only emits lines for *completed* items. Anything still changing
-//! stays in the live region.
+//! This trades away the terminal's own scrollback, search, and selection, so
+//! [`crate::transcript`] provides scrolling in their place. It is a real cost —
+//! `cmd+F` and mouse selection stop meaning what they did — and it is the reason
+//! the transcript pane keeps a generous line budget and a visible scrollbar.
 //!
 //! # Flicker
 //!
-//! Every frame is wrapped in synchronized-output escapes (`CSI ?2026h` /
-//! `CSI ?2026l`) so the terminal presents it atomically. This is the difference
-//! between visible flicker and none in most modern terminals, and it costs two
-//! escape sequences per frame.
+//! Two rules, both of which are invisible until violated because their absence
+//! still renders correctly:
+//!
+//! - Redraw only when something changed. The caller polls on a tick, so an
+//!   unconditional draw repaints ~12 times a second forever.
+//! - Wrap every frame in synchronized output (`CSI ?2026h` / `l`) so the terminal
+//!   presents it atomically instead of tearing.
 
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -27,116 +29,135 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use crossterm::event::{
     DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, KeyEvent, KeyEventKind,
+    MouseEventKind,
 };
 use crossterm::terminal::{
-    BeginSynchronizedUpdate, EndSynchronizedUpdate, disable_raw_mode, enable_raw_mode,
+    BeginSynchronizedUpdate, EndSynchronizedUpdate, EnterAlternateScreen, LeaveAlternateScreen,
+    disable_raw_mode, enable_raw_mode,
 };
 use octane_permission::PermissionMode;
 use octane_protocol::Event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::layout::{Constraint, Direction, Layout};
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::{TerminalOptions, Viewport};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::approval::{ApprovalPrompt, ApprovalReply};
+use crate::completion::{Candidate, Completion};
 use crate::composer::{Composer, Submission};
+use crate::glyphs::Glyphs;
 use crate::keymap::{self, KeyAction, KeyContext};
 use crate::render::{RenderOptions, render_event};
 use crate::status::StatusLine;
-
-/// Height of the live region: border, one input row, border, status.
-///
-/// Kept small on purpose. Every row here is a row the user does not get for
-/// scrollback, and the composer grows only when a draft needs it.
-const BASE_VIEWPORT_HEIGHT: u16 = 4;
+use crate::transcript::Transcript;
 
 /// Composer rows before it stops growing and scrolls internally.
-const MAX_COMPOSER_ROWS: u16 = 10;
+///
+/// Generous, because shift+enter exists so people can write real paragraphs.
+const MAX_COMPOSER_ROWS: u16 = 12;
 
-/// Spinner tick. ~12fps: fast enough to look alive, slow enough to be invisible
-/// in a CPU profile.
+/// Rows the transcript keeps for itself no matter how large the draft grows.
+///
+/// Without a floor, a long draft squeezes the transcript to nothing and the user
+/// loses sight of what they are replying to.
+const MIN_TRANSCRIPT_ROWS: u16 = 3;
+
+/// Spinner tick. ~12fps: alive without being visible in a CPU profile.
 const TICK: Duration = Duration::from_millis(80);
 
-/// What the loop hands back to its caller.
-///
-/// The app does not run the agent — it reports what the user asked for and lets
-/// the caller drive `octane-core`. That is the boundary that keeps agent logic
-/// out of this crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEvent {
     Submit(Submission),
-    /// Shift+Tab.
     ModeChanged(PermissionMode),
-    /// Esc while working.
     Interrupt,
     Exit,
 }
 
 pub struct App {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    transcript: Transcript,
     composer: Composer,
+    completion: Completion,
     status: StatusLine,
     options: RenderOptions,
+    glyphs: Glyphs,
+
+    /// Candidate universes for completion, supplied by the caller.
+    commands: Vec<Candidate>,
+    files: Vec<String>,
+
     pending_approval: Option<(ApprovalPrompt, tokio::sync::oneshot::Sender<ApprovalReply>)>,
     spinner_frame: usize,
     started: Instant,
+
+    workspace: String,
+    sandboxed: bool,
+
     raw_mode: bool,
-    /// Set when something the live region shows has changed.
-    ///
-    /// Without this the caller's poll tick repaints the region ~12 times a second
-    /// forever, which is visible as flicker on any terminal that is not doing
-    /// synchronized updates perfectly.
     dirty: bool,
-    /// Last viewport size actually applied, so `resize` is only called when it
-    /// genuinely changed — see [`App::draw`].
-    viewport_height: u16,
-    viewport_width: u16,
 }
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("mode", &self.status.mode)
-            .field("has_pending_approval", &self.pending_approval.is_some())
+            .field("transcript_lines", &self.transcript.len())
+            .field("completing", &self.completion.is_active())
             .finish_non_exhaustive()
     }
 }
 
 impl App {
-    /// Take over the bottom of the terminal, leaving scrollback alone.
-    pub fn new(status: StatusLine) -> Result<Self> {
+    /// Enter the alternate screen and take over the terminal.
+    pub fn new(status: StatusLine, workspace: String, sandboxed: bool) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        // Bracketed paste, so a multi-line paste arrives as one event instead of
-        // as a burst of keystrokes with newlines that would each submit.
-        crossterm::execute!(stdout, EnableBracketedPaste)?;
-
-        let terminal = Terminal::with_options(
-            CrosstermBackend::new(stdout),
-            TerminalOptions { viewport: Viewport::Inline(BASE_VIEWPORT_HEIGHT) },
+        crossterm::execute!(
+            stdout,
+            EnterAlternateScreen,
+            // Bracketed paste, so a multi-line paste arrives whole rather than as
+            // a burst of keystrokes whose newlines would each submit.
+            EnableBracketedPaste,
+            crossterm::event::EnableMouseCapture,
         )?;
+
+        // Ask for disambiguated key reporting, which is the only way shift+enter
+        // is distinguishable from Enter — without it terminals send a bare CR for
+        // both. Supported by Kitty, Ghostty, WezTerm, foot, and recent iTerm2;
+        // ignored elsewhere, which is why alt+enter and trailing-backslash exist
+        // as portable fallbacks.
+        let _ = crossterm::execute!(
+            io::stdout(),
+            crossterm::event::PushKeyboardEnhancementFlags(
+                crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+            ),
+        );
+
+        let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
+        let glyphs = Glyphs::detect();
 
         Ok(Self {
             terminal,
+            transcript: Transcript::new(),
             composer: Composer::new(),
+            completion: Completion::default(),
             status,
-            options: RenderOptions::default(),
+            options: RenderOptions { glyphs, ..Default::default() },
+            glyphs,
+            commands: Vec::new(),
+            files: Vec::new(),
             pending_approval: None,
             spinner_frame: 0,
             started: Instant::now(),
+            workspace,
+            sandboxed,
             raw_mode: true,
-            // The first frame must always draw.
             dirty: true,
-            viewport_height: BASE_VIEWPORT_HEIGHT,
-            viewport_width: 0,
         })
     }
 
-    /// Mutable access to the status line. Marks the region for redraw, since the
-    /// caller is about to change something it displays.
     pub fn status_mut(&mut self) -> &mut StatusLine {
         self.dirty = true;
         &mut self.status
@@ -147,36 +168,37 @@ impl App {
         &mut self.options
     }
 
-    /// Force a redraw on the next [`App::draw`].
     pub fn invalidate(&mut self) {
         self.dirty = true;
     }
 
-    /// Append an agent event to scrollback.
+    /// Slash commands offered by completion.
+    pub fn set_commands(&mut self, commands: Vec<Candidate>) {
+        self.commands = commands;
+    }
+
+    /// Workspace files offered by `@` completion.
     ///
-    /// Events that render to nothing are skipped without touching the terminal:
-    /// `insert_before` with a zero height still costs a redraw.
+    /// Supplied by the caller rather than walked here, so the UI crate does not
+    /// grow a filesystem dependency.
+    pub fn set_files(&mut self, files: Vec<String>) {
+        self.files = files;
+    }
+
     pub fn push_event(&mut self, event: &Event) -> Result<()> {
         let lines = render_event(event, &self.options);
         if lines.is_empty() {
             return Ok(());
         }
-        self.push_lines(lines)
-    }
-
-    /// Write lines into real scrollback, above the live region.
-    pub fn push_lines(&mut self, lines: Vec<Line<'static>>) -> Result<()> {
-        let height = u16::try_from(lines.len()).unwrap_or(u16::MAX);
-        self.terminal.insert_before(height, |buf| {
-            let paragraph = Paragraph::new(lines);
-            ratatui::widgets::Widget::render(paragraph, buf.area, buf);
-        })?;
-        // Scrolling the region up leaves it needing a repaint.
-        self.dirty = true;
+        self.push_lines(lines);
         Ok(())
     }
 
-    /// Raise an approval prompt. The live region grows to show it.
+    pub fn push_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.transcript.push(lines);
+        self.dirty = true;
+    }
+
     pub fn set_approval(
         &mut self,
         prompt: ApprovalPrompt,
@@ -186,27 +208,24 @@ impl App {
         self.dirty = true;
     }
 
+    /// Empty the transcript, returning to the quiet start screen.
+    pub fn clear_transcript(&mut self) {
+        self.transcript.clear();
+        self.dirty = true;
+    }
+
     pub fn has_pending_approval(&self) -> bool {
         self.pending_approval.is_some()
     }
 
-    /// Redraw the live region, if anything changed.
-    ///
-    /// Both guards below exist because their absence is visible as flicker:
-    ///
-    /// **Nothing changed, nothing drawn.** The caller polls on a tick, so without
-    /// a dirty flag this repaints ~12 times a second forever, including while the
-    /// user is reading a still screen.
-    ///
-    /// **Resize only on an actual size change.** `Terminal::resize` resets both
-    /// of ratatui's buffers, which discards the cell diff and forces a full
-    /// repaint of the region. Calling it unconditionally turned every frame into
-    /// a full repaint and defeated the diffing entirely.
+    /// Redraw, if anything changed.
     pub fn draw(&mut self) -> Result<()> {
         if !self.dirty {
             return Ok(());
         }
         self.dirty = false;
+
+        let _ = crossterm::execute!(io::stdout(), BeginSynchronizedUpdate);
 
         let composer_rows = composer_height(&self.composer);
         let approval_rows = self
@@ -216,73 +235,97 @@ impl App {
             .unwrap_or(0);
         let activity_rows = u16::from(self.status.activity.is_some());
 
-        let needed = BASE_VIEWPORT_HEIGHT + composer_rows.saturating_sub(1) + approval_rows
-            + activity_rows;
-        let area = inline_area(&self.terminal, needed)?;
-
-        if viewport_changed((self.viewport_width, self.viewport_height), area) {
-            self.viewport_height = area.height;
-            self.viewport_width = area.width;
-            self.terminal.resize(area)?;
-        }
-
-        // Synchronized output: the terminal buffers this frame and presents it in
-        // one go, which is what keeps the composer from tearing while streaming.
-        let _ = crossterm::execute!(io::stdout(), BeginSynchronizedUpdate);
-
         let status = self.status.clone();
         let spinner_frame = self.spinner_frame;
-        let composer = &self.composer;
-        let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
         let theme = self.options.theme;
+        let glyphs = self.glyphs;
+        let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
+        let workspace = self.workspace.clone();
+        let sandboxed = self.sandboxed;
+
+        let transcript = &mut self.transcript;
+        let composer = &self.composer;
+        let completion = &self.completion;
 
         self.terminal.draw(|frame| {
+            let area = frame.area();
+
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
+                    Constraint::Length(2),                  // header
+                    Constraint::Min(MIN_TRANSCRIPT_ROWS),   // transcript
                     Constraint::Length(approval_rows),
                     Constraint::Length(activity_rows),
-                    Constraint::Length(composer_rows + 2),
-                    Constraint::Length(1),
+                    Constraint::Length(composer_rows + 2),  // composer + border
+                    Constraint::Length(1),                  // status
                 ])
-                .split(frame.area());
+                .split(area);
+
+            frame.render_widget(header(&workspace, sandboxed, &theme, &glyphs), chunks[0]);
+
+            // Transcript, or the empty state.
+            let body = chunks[1];
+            if transcript.is_empty() {
+                frame.render_widget(empty_state(&theme, &glyphs, body.width), body);
+            } else {
+                let visible = transcript.visible(body.height as usize).to_vec();
+                frame.render_widget(Paragraph::new(visible), body);
+            }
 
             if let Some(prompt) = &pending {
                 let mut lines = vec![Line::from(vec![
-                    Span::styled("? ", Style::default().fg(theme.warning)),
+                    Span::styled(format!("{} ", glyphs.question), theme.label(theme.warning)),
                     Span::raw(prompt.title()),
                 ])];
                 if let Some(diff) = &prompt.diff {
                     lines.extend(crate::render::render_diff(diff, &theme));
                 }
                 lines.push(Line::styled(prompt.options_line(), theme.dim()));
-                frame.render_widget(Paragraph::new(lines), chunks[0]);
+                frame.render_widget(Paragraph::new(lines), chunks[2]);
             }
 
             if let Some(line) = status.activity_line(spinner_frame) {
                 frame.render_widget(
                     Paragraph::new(Line::styled(line, theme.dim())),
-                    chunks[1],
+                    chunks[3],
                 );
             }
 
-            let composer_lines: Vec<Line> =
-                composer.lines().iter().map(|line| Line::raw(line.to_string())).collect();
+            let composer_area = chunks[4];
+            let composer_lines: Vec<Line> = composer
+                .lines()
+                .iter()
+                .map(|line| Line::raw(line.to_string()))
+                .collect();
             frame.render_widget(
-                Paragraph::new(composer_lines)
-                    .block(Block::default().borders(Borders::ALL).border_style(theme.dim())),
-                chunks[2],
+                Paragraph::new(composer_lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.accent))
+                        .title(Span::styled(
+                            format!(" {} ", glyphs.prompt),
+                            theme.label(theme.accent),
+                        )),
+                ),
+                composer_area,
             );
 
-            // Place the real terminal cursor rather than drawing a fake one, so
-            // it blinks as the user's terminal is configured to.
             let (line, column) = composer.cursor_position();
             frame.set_cursor_position((
-                chunks[2].x + 1 + column as u16,
-                chunks[2].y + 1 + line as u16,
+                composer_area.x + 1 + column as u16,
+                composer_area.y + 1 + line as u16,
             ));
 
-            frame.render_widget(status_paragraph(&status, &theme), chunks[3]);
+            frame.render_widget(status_paragraph(&status, &theme, &glyphs), chunks[5]);
+
+            // The popup floats above the composer, so it never displaces the
+            // input the user is typing into.
+            if completion.is_active() {
+                let popup = popup_area(composer_area, completion, area);
+                frame.render_widget(Clear, popup);
+                frame.render_widget(completion_widget(completion, &theme), popup);
+            }
         })?;
 
         let _ = crossterm::execute!(io::stdout(), EndSynchronizedUpdate);
@@ -292,8 +335,8 @@ impl App {
     /// Poll for input. `Ok(None)` means the tick elapsed with nothing to report.
     pub fn poll(&mut self) -> Result<Option<AppEvent>> {
         if !crossterm::event::poll(TICK)? {
-            // An idle tick changes nothing on screen, so it must not schedule a
-            // repaint. Only an animating spinner does.
+            // An idle tick changes nothing, so it must not schedule a repaint.
+            // Only an animating spinner does.
             if let Some(activity) = self.status.activity.as_mut() {
                 activity.elapsed_secs = self.started.elapsed().as_secs();
                 self.spinner_frame = self.spinner_frame.wrapping_add(1);
@@ -304,23 +347,29 @@ impl App {
 
         match crossterm::event::read()? {
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
-                // A keypress may or may not change the composer, but working that
-                // out per action is not worth the bookkeeping — one repaint per
-                // keystroke is exactly the right rate.
                 self.dirty = true;
-                Ok(self.on_key(key))
+                let event = self.on_key(key);
+                self.refresh_completion();
+                Ok(event)
             }
-            // Bracketed paste arrives whole, so newlines inside it insert rather
-            // than submit.
             TermEvent::Paste(text) => {
                 self.composer.insert_str(&text);
+                self.refresh_completion();
+                self.dirty = true;
+                Ok(None)
+            }
+            // Mouse wheel scrolls the transcript, which is the one piece of
+            // native behaviour worth reproducing after taking the screen.
+            TermEvent::Mouse(mouse) => {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => self.transcript.scroll_up(3),
+                    MouseEventKind::ScrollDown => self.transcript.scroll_down(3),
+                    _ => return Ok(None),
+                }
                 self.dirty = true;
                 Ok(None)
             }
             TermEvent::Resize(_, _) => {
-                // Soft wrapping moved, so nothing on screen can be trusted.
-                // Zeroing the recorded width forces the resize path in `draw`.
-                self.viewport_width = 0;
                 self.dirty = true;
                 Ok(None)
             }
@@ -328,17 +377,24 @@ impl App {
         }
     }
 
-    /// Apply a keypress.
-    ///
-    /// Routing lives in [`crate::keymap`] as a pure function; this only performs
-    /// the resulting action. Keeping the decision separate from the effect is
-    /// what makes the bindings testable without a terminal.
+    fn refresh_completion(&mut self) {
+        self.completion.update(
+            self.composer.text(),
+            self.composer.cursor(),
+            &self.commands,
+            &self.files,
+        );
+    }
+
     fn on_key(&mut self, key: KeyEvent) -> Option<AppEvent> {
         let action = {
             let ctx = KeyContext {
                 working: self.status.activity.is_some(),
                 composer_empty: self.composer.is_empty(),
                 approval: self.pending_approval.as_ref().map(|(prompt, _)| prompt),
+                completing: self.completion.is_active(),
+                on_first_line: self.composer.cursor_position().0 == 0,
+                ends_with_continuation: self.composer.ends_with_continuation(),
             };
             keymap::route(key, &ctx)
         };
@@ -378,6 +434,10 @@ impl App {
                 self.composer.move_line_end();
                 None
             }
+            KeyAction::MoveUp => {
+                self.composer.move_up();
+                None
+            }
             KeyAction::HistoryPrevious => {
                 self.composer.history_previous();
                 None
@@ -391,8 +451,61 @@ impl App {
                 None
             }
 
+            KeyAction::CompletionNext => {
+                self.completion.select_next();
+                None
+            }
+            KeyAction::CompletionPrevious => {
+                self.completion.select_previous();
+                None
+            }
+            KeyAction::CompletionAccept => {
+                if let Some((text, cursor)) = self.completion.accept(self.composer.text()) {
+                    self.composer.set_text(text, cursor);
+                }
+                self.completion.dismiss();
+                None
+            }
+            KeyAction::CompletionDismiss => {
+                self.completion.dismiss();
+                None
+            }
+
+            KeyAction::ScrollUp => {
+                self.transcript.scroll_up(3);
+                None
+            }
+            KeyAction::ScrollDown => {
+                self.transcript.scroll_down(3);
+                None
+            }
+            KeyAction::PageUp => {
+                self.transcript.page_up();
+                None
+            }
+            KeyAction::PageDown => {
+                self.transcript.page_down();
+                None
+            }
+            KeyAction::ScrollTop => {
+                self.transcript.scroll_to_top();
+                None
+            }
+            KeyAction::ScrollBottom => {
+                self.transcript.scroll_to_bottom();
+                None
+            }
+
+            KeyAction::ContinueLine => {
+                self.composer.continue_line();
+                None
+            }
+
             KeyAction::Submit => {
                 self.started = Instant::now();
+                // Submitting jumps to the bottom: the reply is what the user
+                // wants to see next, wherever they had scrolled to.
+                self.transcript.scroll_to_bottom();
                 self.composer.submit().map(AppEvent::Submit)
             }
             KeyAction::CycleMode => {
@@ -416,7 +529,6 @@ impl App {
     }
 
     fn answer(&mut self, reply: ApprovalReply) {
-        // Navigation is not a decision: keep the prompt up.
         if !reply.is_decision() {
             return;
         }
@@ -426,35 +538,154 @@ impl App {
         }
     }
 
-    /// Restore the terminal. Idempotent, so calling it twice is harmless.
+    /// Restore the terminal. Idempotent.
     pub fn restore(&mut self) -> Result<()> {
         if !self.raw_mode {
             return Ok(());
         }
         self.raw_mode = false;
         disable_raw_mode()?;
-        crossterm::execute!(io::stdout(), DisableBracketedPaste)?;
-        // Leave the cursor below our region so the shell prompt does not land on
-        // top of the last frame.
-        self.terminal.clear()?;
-        println!();
+        // Popped first, and unconditionally: leaving a terminal in enhanced
+        // reporting mode breaks the user's next program.
+        let _ = crossterm::execute!(io::stdout(), crossterm::event::PopKeyboardEnhancementFlags);
+        crossterm::execute!(
+            io::stdout(),
+            crossterm::event::DisableMouseCapture,
+            DisableBracketedPaste,
+            LeaveAlternateScreen,
+        )?;
         Ok(())
     }
 }
 
 impl Drop for App {
     fn drop(&mut self) {
-        // A panic mid-session must not leave the terminal in raw mode with no
-        // echo — the user would be left with an apparently dead shell.
+        // A panic must not leave the user in the alternate screen with no echo,
+        // which looks like a dead shell.
         let _ = self.restore();
     }
 }
 
-fn status_paragraph<'a>(status: &StatusLine, theme: &crate::theme::Theme) -> Paragraph<'a> {
-    let mut spans = Vec::new();
+/// Brand header: wordmark, workspace, sandbox state.
+fn header<'a>(
+    workspace: &str,
+    sandboxed: bool,
+    theme: &crate::theme::Theme,
+    glyphs: &Glyphs,
+) -> Paragraph<'a> {
+    let mark = if *glyphs == crate::glyphs::UNICODE { "\u{2588}\u{2584}\u{2588}" } else { "[#]" };
+
+    let mut spans = vec![
+        Span::styled(format!(" {mark} OCTANE"), theme.label(theme.accent)),
+        Span::styled(format!("  {}  ", glyphs.separator), theme.dim()),
+        Span::styled(workspace.to_string(), theme.dim()),
+    ];
+    if !sandboxed {
+        // Running unconfined is not something to learn by surprise.
+        spans.push(Span::styled("  sandbox OFF", theme.label(theme.error)));
+    }
+
+    Paragraph::new(vec![Line::from(spans), Line::default()])
+}
+
+/// Shown when there are no messages yet.
+///
+/// The negative space is deliberate: an empty session should look calm and
+/// finished, not like a screen waiting for content that failed to load.
+fn empty_state<'a>(
+    theme: &crate::theme::Theme,
+    glyphs: &Glyphs,
+    width: u16,
+) -> Paragraph<'a> {
+    let hints: &[(&str, &str)] = &[
+        ("type a message", "ask octane to do something"),
+        ("!command", "run a shell command"),
+        ("@path", "attach a file"),
+        ("/", "commands"),
+        ("shift/alt+enter", "newline"),
+        ("shift+tab", "cycle mode"),
+    ];
+
+    let mut lines = vec![
+        Line::default(),
+        Line::from(vec![
+            Span::styled(format!("  {}", glyphs.claw_mark()), theme.label(theme.accent)),
+            Span::styled(" an agent that codes in your terminal", theme.dim()),
+        ]),
+        Line::default(),
+    ];
+
+    for (key, description) in hints {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {key:<16}"), Style::default().fg(theme.accent)),
+            Span::styled(description.to_string(), theme.dim()),
+        ]));
+    }
+
+    if width >= 40 {
+        lines.push(Line::default());
+        lines.push(Line::styled(
+            format!("  {}", glyphs.rule((width as usize).min(58).saturating_sub(2))),
+            theme.dim(),
+        ));
+    }
+
+    Paragraph::new(lines)
+}
+
+fn completion_widget<'a>(
+    completion: &Completion,
+    theme: &crate::theme::Theme,
+) -> Paragraph<'a> {
+    let (visible, highlight) = completion.visible();
+
+    let lines: Vec<Line> = visible
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let selected = index == highlight;
+            let marker = if selected { "\u{25b8} " } else { "  " };
+            let style = if selected {
+                Style::default().fg(theme.accent)
+            } else {
+                Style::default().fg(theme.assistant)
+            };
+            Line::from(vec![
+                Span::styled(marker, Style::default().fg(theme.accent)),
+                Span::styled(candidate.value.clone(), style),
+                Span::styled(format!("  {}", candidate.detail), theme.dim()),
+            ])
+        })
+        .collect();
+
+    Paragraph::new(lines).block(
+        Block::default().borders(Borders::ALL).border_style(theme.dim()),
+    )
+}
+
+/// Place the popup directly above the composer, clamped to the screen.
+fn popup_area(composer: Rect, completion: &Completion, screen: Rect) -> Rect {
+    let rows = (completion.visible().0.len() as u16).min(crate::completion::MAX_VISIBLE as u16) + 2;
+    let height = rows.min(screen.height.saturating_sub(composer.height).max(3));
+    let width = composer.width;
+
+    Rect {
+        x: composer.x,
+        y: composer.y.saturating_sub(height),
+        width,
+        height,
+    }
+}
+
+fn status_paragraph<'a>(
+    status: &StatusLine,
+    theme: &crate::theme::Theme,
+    glyphs: &Glyphs,
+) -> Paragraph<'a> {
+    let mut spans = vec![Span::raw(" ")];
     for (index, segment) in status.segments().into_iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" · ", theme.dim()));
+            spans.push(Span::styled(format!(" {} ", glyphs.separator), theme.dim()));
         }
         spans.push(Span::styled(segment.text.clone(), Style::default().fg(segment.color(theme))));
     }
@@ -471,45 +702,16 @@ fn approval_height(prompt: &ApprovalPrompt) -> u16 {
     let diff_rows = prompt
         .diff
         .as_ref()
-        // Capped: a 500-line diff must not swallow the terminal. `f` opens the
-        // full-screen view for anything larger.
+        // Capped: a 500-line diff must not swallow the screen. `f` opens the
+        // full view for anything larger.
         .map(|diff| u16::try_from(diff.lines().count()).unwrap_or(u16::MAX).min(12))
         .unwrap_or(0);
-    // Title + diff + options.
     2 + diff_rows
-}
-
-/// Clamp the requested viewport height to something the terminal can give.
-fn inline_area(
-    terminal: &Terminal<CrosstermBackend<Stdout>>,
-    requested: u16,
-) -> Result<ratatui::layout::Rect> {
-    let size = terminal.size()?;
-    Ok(ratatui::layout::Rect::new(0, 0, size.width, clamp_height(requested, size.height)))
-}
-
-/// Whether the live region actually needs a ratatui `resize`.
-///
-/// Split out and tested because calling `resize` unconditionally is not a
-/// visible mistake — it renders correctly. It just resets both of ratatui's
-/// buffers, discarding the cell diff, so every frame becomes a full repaint.
-/// Measured at 9.6 KB/s of terminal traffic while completely idle, which is
-/// what the flicker was.
-fn viewport_changed(current: (u16, u16), area: ratatui::layout::Rect) -> bool {
-    current != (area.width, area.height)
-}
-
-/// Never take more than half the screen: the transcript is the point, and a live
-/// region that fills the window leaves nothing to read.
-fn clamp_height(requested: u16, terminal_height: u16) -> u16 {
-    let ceiling = (terminal_height / 2).max(BASE_VIEWPORT_HEIGHT);
-    requested.clamp(BASE_VIEWPORT_HEIGHT, ceiling)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::approval::ApprovalPrompt;
     use octane_permission::Resource;
 
     fn prompt(diff: Option<&str>) -> ApprovalPrompt {
@@ -521,65 +723,67 @@ mod tests {
     }
 
     #[test]
-    fn the_composer_grows_with_the_draft_but_is_capped() {
+    fn the_composer_grows_with_the_draft() {
         let mut composer = Composer::new();
         assert_eq!(composer_height(&composer), 1);
 
-        for _ in 0..3 {
+        // This is what shift+enter does, and the box must follow it.
+        for expected in 2..=6 {
             composer.newline();
+            assert_eq!(composer_height(&composer), expected);
         }
-        assert_eq!(composer_height(&composer), 4);
+    }
 
-        for _ in 0..50 {
+    #[test]
+    fn a_runaway_draft_is_capped() {
+        let mut composer = Composer::new();
+        for _ in 0..100 {
             composer.newline();
         }
         assert_eq!(
             composer_height(&composer),
             MAX_COMPOSER_ROWS,
-            "a long draft must not swallow the screen"
+            "the transcript must keep some rows"
         );
-    }
-
-    #[test]
-    fn an_unchanged_viewport_is_not_resized() {
-        let area = ratatui::layout::Rect::new(0, 0, 100, 6);
-        // The common case, every frame. Resizing here throws away the cell diff
-        // and turns each frame into a full repaint.
-        assert!(!viewport_changed((100, 6), area));
-    }
-
-    #[test]
-    fn a_changed_viewport_is_resized() {
-        let area = ratatui::layout::Rect::new(0, 0, 100, 6);
-        assert!(viewport_changed((100, 5), area), "the composer grew");
-        assert!(viewport_changed((90, 6), area), "the window was resized");
-        // Zero width is the sentinel `poll` sets on a terminal resize to force
-        // the resize path, since soft wrapping has moved.
-        assert!(viewport_changed((0, 6), area));
-    }
-
-    #[test]
-    fn the_live_region_never_takes_more_than_half_the_screen() {
-        // On a short terminal a long draft must not leave zero rows of transcript.
-        assert_eq!(clamp_height(30, 24), 12);
-        assert_eq!(clamp_height(4, 24), 4);
-        // And it always gets at least the base rows, however short the terminal.
-        assert_eq!(clamp_height(20, 6), BASE_VIEWPORT_HEIGHT);
-        assert_eq!(clamp_height(1, 100), BASE_VIEWPORT_HEIGHT);
     }
 
     #[test]
     fn approval_height_accounts_for_the_diff_and_caps_it() {
         assert_eq!(approval_height(&prompt(None)), 2);
-
-        let small = "+ one\n+ two\n";
-        assert_eq!(approval_height(&prompt(Some(small))), 4);
+        assert_eq!(approval_height(&prompt(Some("+ one\n+ two\n"))), 4);
 
         let huge: String = (0..500).map(|i| format!("+ line {i}\n")).collect();
-        assert_eq!(
-            approval_height(&prompt(Some(&huge))),
-            14,
-            "a large diff is capped; `f` opens the full view"
-        );
+        assert_eq!(approval_height(&prompt(Some(&huge))), 14);
+    }
+
+    #[test]
+    fn the_popup_sits_above_the_composer() {
+        let screen = Rect::new(0, 0, 80, 30);
+        let composer = Rect::new(0, 24, 80, 4);
+
+        let mut completion = Completion::default();
+        let files: Vec<String> = (0..20).map(|i| format!("src/f{i}.rs")).collect();
+        completion.update("@f", 2, &[], &files);
+
+        let popup = popup_area(composer, &completion, screen);
+
+        assert!(popup.y + popup.height <= composer.y, "popup must not cover the input");
+        assert_eq!(popup.x, composer.x);
+        assert_eq!(popup.width, composer.width);
+    }
+
+    #[test]
+    fn the_popup_never_runs_off_the_top() {
+        // A short terminal with a tall draft is the case that overflows.
+        let screen = Rect::new(0, 0, 80, 10);
+        let composer = Rect::new(0, 2, 80, 6);
+
+        let mut completion = Completion::default();
+        let files: Vec<String> = (0..50).map(|i| format!("src/f{i}.rs")).collect();
+        completion.update("@f", 2, &[], &files);
+
+        let popup = popup_area(composer, &completion, screen);
+        assert!(popup.y < screen.height);
+        assert!(popup.height > 0);
     }
 }
