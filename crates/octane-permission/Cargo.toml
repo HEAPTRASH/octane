@@ -9,7 +9,7 @@ repository.workspace = true
 
 [dependencies]
 camino.workspace = true
-regex = "1"
+regex.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 

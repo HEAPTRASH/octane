@@ -11,15 +11,21 @@
 
 pub mod bash;
 pub mod edit;
+pub mod glob;
+pub mod grep;
+pub mod list;
 pub mod read;
 pub mod write;
 
 pub use bash::BashTool;
 pub use edit::EditTool;
+pub use glob::GlobTool;
+pub use grep::GrepTool;
+pub use list::ListTool;
 pub use read::ReadTool;
 pub use write::WriteTool;
 
-/// Register the file tools and `bash` against a shared tracker and sandbox policy.
+/// Register every built-in tool against a shared tracker and sandbox policy.
 ///
 /// The tracker must be shared: `read` records into it and `write`/`edit` check it,
 /// so handing each tool its own would silently disable the read-before-write
@@ -33,4 +39,10 @@ pub fn register_all(
     registry.register(std::sync::Arc::new(WriteTool::new(tracker.clone())));
     registry.register(std::sync::Arc::new(EditTool::new(tracker)));
     registry.register(std::sync::Arc::new(BashTool::new(sandbox)));
+
+    // Search tools are stateless: they read the filesystem directly and hold
+    // nothing between calls.
+    registry.register(std::sync::Arc::new(GlobTool::new()));
+    registry.register(std::sync::Arc::new(GrepTool::new()));
+    registry.register(std::sync::Arc::new(ListTool::new()));
 }

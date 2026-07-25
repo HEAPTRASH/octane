@@ -5,6 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
+use crate::content::{image_kind, looks_binary};
 use crate::paths::{self, ResolvedPath};
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutcome};
 use crate::tracker::FileTracker;
@@ -15,9 +16,6 @@ pub const DEFAULT_LINE_LIMIT: usize = 2_000;
 /// Longer lines are cut. A minified bundle on one line would otherwise consume
 /// the whole context window in a single call.
 pub const MAX_LINE_LENGTH: usize = 2_000;
-
-/// Bytes inspected when deciding whether a file is binary.
-const BINARY_SNIFF_BYTES: usize = 8_192;
 
 const DESCRIPTION: &str = "\
 Reads a file from the filesystem and returns its contents with line numbers.
@@ -197,32 +195,6 @@ impl Tool for ReadTool {
             "preview": preview,
         })))
     }
-}
-
-/// NUL byte in the first block means binary.
-///
-/// The same heuristic git uses. Cheap, and wrong only for files that are
-/// pathological in ways a coding agent will not meet.
-fn looks_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(BINARY_SNIFF_BYTES).any(|byte| *byte == 0)
-}
-
-/// Recognize images by extension so the error can name the format.
-///
-/// Checked before the binary test purely for the message: "this is a PNG" tells
-/// the model something actionable, "this is binary" does not.
-fn image_kind(path: &camino::Utf8Path) -> Option<&'static str> {
-    let extension = path.extension()?.to_ascii_lowercase();
-    Some(match extension.as_str() {
-        "png" => "PNG",
-        "jpg" | "jpeg" => "JPEG",
-        "gif" => "GIF",
-        "webp" => "WebP",
-        "bmp" => "BMP",
-        "ico" => "ICO",
-        "svg" => return None, // SVG is text and genuinely readable.
-        _ => return None,
-    })
 }
 
 #[cfg(test)]

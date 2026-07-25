@@ -45,6 +45,12 @@ clap = { version = "4", features = ["derive", "env"] }
 ratatui = "0.29"
 crossterm = "0.28"
 
+# search: ripgrep's own walker and glob engine, so .gitignore semantics match
+# what developers already expect from rg/fd rather than approximating them.
+ignore = "0.4"
+globset = "0.4"
+regex = "1"
+
 # misc
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = { version = "0.2", features = ["serde"] }

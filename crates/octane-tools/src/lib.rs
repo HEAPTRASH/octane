@@ -16,15 +16,19 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod builtin;
+pub mod content;
 pub mod paths;
 pub mod registry;
 pub mod tool;
 pub mod tracker;
+pub mod walk;
 
 #[cfg(test)]
 mod tests_support;
 
-pub use builtin::{BashTool, EditTool, ReadTool, WriteTool, register_all};
+pub use builtin::{
+    BashTool, EditTool, GlobTool, GrepTool, ListTool, ReadTool, WriteTool, register_all,
+};
 pub use paths::{ResolvedPath, resolve};
 pub use registry::ToolRegistry;
 pub use tool::{Tool, ToolContext, ToolError, ToolOutcome};

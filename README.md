@@ -6,12 +6,13 @@ Design notes and the survey the architecture is derived from are in [`RESEARCH.m
 
 ## Status
 
-Early. The subsystems below are implemented and tested. `read`, `write`, `edit`, and `bash` work and run under real OS containment; the interactive session is not wired up yet.
+Early. The subsystems below are implemented and tested. Seven tools work — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment. The interactive session is not wired up yet.
 
 ```
 $ octane doctor                                        # resolved config: sandbox, writable roots, mode
 $ octane tool read '{"path":"src/main.rs","limit":40}' # run one tool, no model involved
 $ octane tool bash '{"command":"cargo test","description":"runs the tests"}'
+$ octane tool grep '{"pattern":"TODO","mode":"files","glob":"**/*.rs"}'
 ```
 
 `octane tool` applies the same policy and containment a real turn would, which makes "is the sandbox actually on?" answerable without spending a token.
@@ -41,7 +42,7 @@ One responsibility per crate. The dependency direction is strictly one-way — n
 |---|---|---|
 | `octane-protocol` | Thread / Turn / Item / Message / Part / Event — the shared vocabulary and wire format | any behaviour |
 | `octane-provider` | `LanguageModel` trait, normalized `StreamEvent`, `ProviderTransform`, pricing | prompt assembly, tool execution |
-| `octane-tools` | `Tool` trait, `ToolRegistry` | whether a call is permitted |
+| `octane-tools` | `Tool` trait, `ToolRegistry`, the built-in tools | whether a call is permitted |
 | `octane-permission` | `action(target)` policy → allow / ask / deny; modes | OS enforcement |
 | `octane-sandbox` | Seatbelt / Landlock / AppContainer containment | consent |
 | `octane-context` | token budget, pruning, compaction thresholds | making model calls |
@@ -72,12 +73,14 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 - **The prompt is append-only.** Config changed mid-session? Append a developer message; never edit what was already sent.
 - **A denial ends the turn.** Reporting a refusal to the model invites it to find another route to the same action, which turns a clear "no" into a negotiation.
 - **The model decides when the task is done.** The step cap, loop detector, and context thresholds are safety rails, not completion criteria.
+- **`.gitignore` is honoured even outside a git repo** (`require_git(false)`). `ignore` defaults the other way to match ripgrep's CLI, but an agent gets pointed at extracted archives and vendored subtrees that have a `.gitignore` and no `.git`. Honouring it only sometimes reads as the tool being bad, not as a subtlety.
+- **`glob` sorts by mtime, `list` sorts alphabetically.** Recency is the cheapest relevance signal when hunting for a file, but a tree whose branches move between calls is harder to reason about than a stable one.
 - **Loop detection hashes `(tool, input, output)`.** Including the output is what makes it correct: a repeated call whose output *changed* is progress — polling a build, tailing a log.
 
 ## Testing
 
 ```bash
-cargo test --workspace       # 216 tests
+cargo test --workspace       # 268 tests
 cargo clippy --workspace --all-targets
 ```
 
