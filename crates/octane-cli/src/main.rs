@@ -755,7 +755,7 @@ fn set_thinking(
             }
             note
         }
-        Err(error) => format!("{error}"),
+        Err(error) => error.to_string(),
     }
 }
 
