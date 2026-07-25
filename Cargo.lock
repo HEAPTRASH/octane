@@ -734,6 +734,7 @@ dependencies = [
  "octane-memory",
  "octane-permission",
  "octane-protocol",
+ "octane-provider",
  "octane-sandbox",
  "octane-tools",
  "octane-tui",
@@ -845,6 +846,7 @@ dependencies = [
  "octane-protocol",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
 ]
 

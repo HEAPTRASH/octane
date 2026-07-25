@@ -81,6 +81,44 @@ Three colour tiers, detected rather than assumed: exact hexes on truecolor, near
 
 Glyphs are chosen for **width safety**, not just availability. A character that renders double-width in one terminal and single in another silently destroys every box and aligned column, and the breakage is invisible until someone reports it from a terminal you don't have. Everything comes from ranges that are unambiguously narrow — box drawing, block elements, geometric shapes, braille, arrows. Emoji, Nerd Font glyphs, and emoji-presentation symbols like `⚡` and `✔` are excluded; `✓` is text presentation and safe, its neighbour is not. A full ASCII set covers terminals without dependable Unicode, and it reaches the transcript and status line, not just the banner.
 
+## Providers and models
+
+One JSON file per **provider**, declaring a connection and every model reachable through it. Dropped in `~/.octane/providers/*.json` or `.octane/providers/*.json`, filename as the provider key, project files winning over user files.
+
+```bash
+octane models                    # what is configured, and what is not
+octane --model corp/claude       # provider/model
+octane --model sonnet            # bare key, when unambiguous
+```
+
+The format follows [Junie's custom-LLM profiles](https://junie.jetbrains.com/docs/custom-llm-models.html) for `${VAR}` references and merge semantics, and catwalk's `models` map so one file covers many models rather than Junie's file-per-model.
+
+**`api` and `baseUrl` are per-model, not just per-provider.** Both Junie and catwalk fix the wire format at the provider, which does not survive real gateways — one endpoint commonly fronts `/chat/completions`, `/responses`, and `/messages` at once, and Google's two flavours share a format while differing in URL and auth entirely.
+
+```json
+{
+  "api": "openai-completion",
+  "baseUrl": "https://gateway.corp/v1",
+  "auth": { "type": "apiKey", "value": "${GATEWAY_TOKEN}" },
+  "defaults": { "primary": "claude", "faster": "mini" },
+  "models": {
+    "gpt":    { "id": "gpt-5" },
+    "o-next": { "id": "o-next", "api": "openai-responses" },
+    "claude": { "id": "claude-sonnet-4-5", "api": "anthropic",
+                "baseUrl": "https://gateway.corp/anthropic/v1",
+                "auth": { "type": "apiKey", "value": "${CORP_ANTHROPIC_TOKEN}",
+                          "header": "x-api-key", "prefix": "" } },
+    "gemini": { "id": "gemini-3-pro", "api": "google" }
+  }
+}
+```
+
+Four wire formats cover essentially everything (`RESEARCH.md` §L): `openai-completion`, `openai-responses`, `anthropic`, `google`. Auth is typed rather than a key string, because the endpoints people actually need are not all header-and-token — `apiKey` (with configurable header and prefix, since OpenAI, Anthropic, and Gemini all disagree), `none`, `googleVertex`, `awsSigV4`, `tokenFile`.
+
+`${VAR}` references make a provider file safe to commit and share. A missing variable is a **load error naming the variable**, and an unusable provider is **listed with the reason** rather than silently vanishing — that is how someone loses an hour to an unset variable they cannot see.
+
+Worked examples in [`examples/providers/`](examples/providers/).
+
 ## The two layers that are easy to conflate
 
 **Policy** (`octane-permission`) asks *should this be allowed?* and runs before a command does.
@@ -108,7 +146,7 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 417 tests
+cargo test --workspace       # 469 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

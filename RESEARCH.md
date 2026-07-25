@@ -727,3 +727,99 @@ Plus which model is answering, since mid-session switching is a feature.
  ╰──────────────────────────────────────────────╯
    build · sonnet-5 · ctx 12% · $0.04 · ⇧⭾ mode      ← status
 ```
+
+---
+
+# Addendum: providers and model configuration
+
+## L. Four APIs cover almost everything
+
+From pi's write-up, confirmed by Junie shipping exactly the same set: there are four wire formats worth speaking.
+
+| Format | Endpoint | Reaches |
+|---|---|---|
+| OpenAI Chat Completions | `/v1/chat/completions` | OpenAI, and nearly every self-hosted and third-party endpoint — Ollama, vLLM, LM Studio, llama.cpp, Groq, Cerebras, xAI, Mistral, OpenRouter, DeepSeek, LiteLLM proxies |
+| OpenAI Responses | `/v1/responses` | newer OpenAI, and endpoints that implement it |
+| Anthropic Messages | `/v1/messages` | Anthropic, Bedrock, Vertex |
+| Google Generative AI | `:generateContent` | AI Studio, Vertex |
+
+Completions is the one with the long tail of divergence, because every provider has its own reading of it. Real cases from pi:
+
+- Cerebras, xAI, Mistral, Chutes reject the `store` field
+- Mistral and Chutes want `max_tokens`, not `max_completion_tokens`
+- Cerebras, xAI, Mistral, Chutes do not support the `developer` role
+- Grok rejects `reasoning_effort`
+- Reasoning comes back as `reasoning_content` on some, `reasoning` on others
+- Google still does not stream tool calls
+
+None of that belongs in the agent loop. It belongs in a per-provider transform (`RESEARCH.md` §2, opencode's `ProviderTransform`).
+
+## M. Junie's custom-model profiles
+
+The best configuration design I found, and worth adopting nearly wholesale.
+
+**Discovery.** JSON files in `$JUNIE_HOME/models/*.json` (user) and `.junie/models/*.json` (project). The filename minus `.json` is the profile id — no name field to keep in sync with anything.
+
+**Shape.** Top-level fields are defaults; two optional roles override them.
+
+```json
+{
+  "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
+  "id": "qwen/qwen3-coder",
+  "apiType": "OpenAICompletion",
+  "apiKey": "${OPENROUTER_API_KEY}",
+  "extraHeaders": { "X-Title": "octane" },
+  "extraBody":    { "tags": ["team:platform"] },
+  "temperature": 0,
+  "maxContextLength": 262144,
+  "primaryModel": { "id": "anthropic/claude-sonnet-4.5" },
+  "fasterModel":  { "id": "qwen/qwen3-coder", "temperature": 0 }
+}
+```
+
+**`primaryModel` / `fasterModel`** is a good abstraction. The faster role is for summarization and classification — exactly the hidden compaction and title agents — and letting it be a cheaper model is a real cost lever that costs nothing to expose.
+
+**Merge rules**, and the distinction matters:
+
+- scalars (`id`, `baseUrl`, `apiKey`, `apiType`, `temperature`, `maxContextLength`) — replaced
+- `extraHeaders` — merged, role wins on conflict
+- `extraBody` — merged **recursively**, so a role can override one nested key without replacing the whole subtree
+
+**`${VAR}` environment references** in `apiKey` and `extraHeaders`, because profiles get committed to share a `baseUrl` or routing setup with a team. A missing variable is a **load error naming the variable**, not a silent empty header — the alternative is a 401 that looks like a bad key.
+
+**`extraBody`** merges into the request root, for proxies that want routing metadata or tags (LiteLLM). Junie notes it takes precedence over fields it sets itself, which is a sharp edge worth documenting rather than preventing.
+
+**No temperature by default.** Junie sends none unless configured, letting the provider use its own. Right call: a hardcoded `0.7` silently overrides a provider's tuned default.
+
+Junie also says plainly that small or heavily quantized models fail at agentic work — malformed tool calls, drift, loops — and that this is the model's limitation, not the harness's. Worth repeating in our own docs, because it is the first thing people blame the tool for.
+
+## N. Crush / catwalk: provider with a models array
+
+[catwalk](https://github.com/charmbracelet/catwalk) is Crush's provider database, and it fixes Junie's main weakness — one file per model.
+
+```go
+type Provider struct {
+    Name, ID, APIKey, APIEndpoint string
+    Type                Type              // openai | openai-compat | anthropic | google | azure | bedrock | google-vertex | ...
+    DefaultLargeModelID string            // == Junie's primaryModel
+    DefaultSmallModelID string            // == Junie's fasterModel
+    Models              []Model
+    DefaultHeaders      map[string]string
+}
+```
+
+Crush also distinguishes `openai` from `openai-compat` — same wire format, but the former means "actually OpenAI behind a gateway" and the latter "something else wearing its shape". That distinction drives model detection, not encoding.
+
+What catwalk gets wrong for our purposes: `Type` and `APIEndpoint` sit on the *provider*, so a provider speaks exactly one format at one URL.
+
+## O. What octane adopts
+
+Junie's `${VAR}` handling and merge semantics, catwalk's provider-with-models shape, and one thing neither has.
+
+**`api` and `baseUrl` are per-model.** A single gateway commonly fronts several shapes at once — `/v1/chat/completions`, `/v1/responses`, and `/v1/messages` behind one host — and neither format can express that. Both fields become provider *defaults* any model may override, which also makes Google's two flavours expressible: same `api: "google"`, different `baseUrl` and different `auth`.
+
+**Auth is typed, not a key string.** `apiKey` carries a configurable header and prefix, because the three major formats disagree — `Authorization: Bearer`, `x-api-key` with no prefix, `x-goog-api-key`. Plus `none` for local endpoints, `googleVertex` (project + location + ADC), `awsSigV4` (region + credential chain), and `tokenFile` for OAuth flows minted out of band.
+
+**Unusable providers are listed with a reason.** Filtering a provider out because its variable is unset, silently, is how someone loses an hour. Junie fails the whole load; we report and continue, so one bad file does not stop a session.
+
+Discovery from `~/.octane/providers/*.json` and `.octane/providers/*.json`, filename as the provider key, project winning. A file replaces a built-in of the same name wholesale rather than merging — a half-overridden connection is harder to reason about, and merging makes it impossible to *remove* a model.

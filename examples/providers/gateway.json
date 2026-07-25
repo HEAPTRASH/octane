@@ -1,0 +1,31 @@
+{
+  "name": "Corporate gateway",
+  "api": "openai-completion",
+  "baseUrl": "https://gateway.example.com/v1",
+  "auth": { "type": "apiKey", "value": "${GATEWAY_TOKEN}" },
+  "headers": { "X-Team": "platform" },
+  "body": { "routing": { "tier": "standard" } },
+  "defaults": { "primary": "claude", "faster": "mini" },
+
+  "models": {
+    "gpt":    { "id": "gpt-5" },
+    "mini":   { "id": "gpt-5-mini", "body": { "routing": { "tier": "cheap" } } },
+
+    "o-next": { "id": "o-next", "api": "openai-responses" },
+
+    "claude": {
+      "id": "claude-sonnet-4-5",
+      "api": "anthropic",
+      "baseUrl": "https://gateway.example.com/anthropic/v1",
+      "auth": { "type": "apiKey", "value": "${GATEWAY_ANTHROPIC_TOKEN}", "header": "x-api-key", "prefix": "" },
+      "contextWindow": 200000
+    },
+
+    "gemini": {
+      "id": "gemini-3-pro",
+      "api": "google",
+      "baseUrl": "https://gateway.example.com/google/v1beta",
+      "contextWindow": 1000000
+    }
+  }
+}

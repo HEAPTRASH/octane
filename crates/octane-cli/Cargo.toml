@@ -16,6 +16,7 @@ octane-core.workspace = true
 octane-memory.workspace = true
 octane-permission.workspace = true
 octane-protocol.workspace = true
+octane-provider.workspace = true
 octane-sandbox.workspace = true
 octane-tools.workspace = true
 octane-tui.workspace = true

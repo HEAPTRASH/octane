@@ -11,11 +11,19 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod api;
+pub mod config;
 pub mod model;
+pub mod registry;
 pub mod pricing;
 pub mod stream;
 pub mod transform;
 
+pub use api::ApiType;
+pub use config::{
+    Auth, ConfigError, Defaults, ModelEntry, ProviderConfig, ResolvedModel, Role,
+};
+pub use registry::Registry;
 pub use model::{LanguageModel, ModelInfo, ModelRequest, ModelSelector, ProviderId};
 pub use stream::{FinishReason, StreamEvent};
 pub use transform::ProviderTransform;

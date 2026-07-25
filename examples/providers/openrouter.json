@@ -1,0 +1,13 @@
+{
+  "name": "OpenRouter",
+  "api": "openai-completion",
+  "baseUrl": "https://openrouter.ai/api/v1",
+  "auth": { "type": "apiKey", "value": "${OPENROUTER_API_KEY}" },
+  "headers": { "X-Title": "octane" },
+  "defaults": { "primary": "sonnet", "faster": "haiku" },
+  "models": {
+    "sonnet": { "id": "anthropic/claude-sonnet-4.5", "contextWindow": 200000, "maxOutput": 64000, "reasoning": true, "images": true },
+    "haiku":  { "id": "anthropic/claude-haiku-4.5",  "contextWindow": 200000 },
+    "qwen":   { "id": "qwen/qwen3-coder", "contextWindow": 262144, "temperature": 0 }
+  }
+}

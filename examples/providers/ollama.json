@@ -1,0 +1,10 @@
+{
+  "name": "Ollama",
+  "api": "openai-completion",
+  "baseUrl": "http://localhost:11434/v1",
+  "auth": { "type": "none" },
+  "models": {
+    "qwen":     { "id": "qwen3-coder:latest", "contextWindow": 262144, "temperature": 0 },
+    "devstral": { "id": "devstral:latest", "contextWindow": 131072 }
+  }
+}

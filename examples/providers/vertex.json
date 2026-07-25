@@ -1,0 +1,9 @@
+{
+  "name": "Google Vertex AI",
+  "api": "google",
+  "baseUrl": "https://us-central1-aiplatform.googleapis.com/v1/projects/${GOOGLE_PROJECT}/locations/us-central1/publishers/google/models",
+  "auth": { "type": "googleVertex", "project": "${GOOGLE_PROJECT}", "location": "us-central1" },
+  "models": {
+    "pro": { "id": "gemini-3-pro", "contextWindow": 1000000, "reasoning": true, "images": true }
+  }
+}

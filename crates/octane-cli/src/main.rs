@@ -62,6 +62,9 @@ impl From<ModeArg> for PermissionMode {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// List configured providers and models.
+    Models,
+
     /// Print the resolved configuration and exit.
     ///
     /// Exists because "why did it ask me that?" and "what can it write to?" are
@@ -107,7 +110,9 @@ fn main() -> Result<()> {
     let mode: PermissionMode = cli.mode.into();
 
     match cli.command {
+        Some(Command::Models) => list_models(&workspace),
         Some(Command::Doctor) => doctor(&workspace, &sandbox, mode, cli.model.as_deref()),
+        
         Some(Command::Tool { name, input }) => {
             // Built here rather than in main so the async runtime is only started
             // when something actually needs it.
@@ -132,7 +137,22 @@ fn doctor(
     println!("octane {}", env!("CARGO_PKG_VERSION"));
     println!();
     println!("workspace     {workspace}");
-    println!("model         {}", model.unwrap_or("<unset>"));
+
+    // Resolved, not echoed: printing back what was typed answers nothing.
+    let registry = registry(workspace);
+    match model {
+        Some(reference) => match registry.resolve(reference) {
+            Ok(resolved) => println!(
+                "model         {}  ({}, {})",
+                resolved.reference, resolved.model_id, resolved.api
+            ),
+            Err(error) => println!("model         {reference}  — {error}"),
+        },
+        None => match registry.resolve_role(None, octane_provider::Role::Primary) {
+            Ok(resolved) => println!("model         {} (default)", resolved.reference),
+            Err(_) => println!("model         <none configured>"),
+        },
+    }
     println!("mode          {}", mode.label());
 
     println!();
@@ -252,16 +272,39 @@ async fn interactive(
     mode: PermissionMode,
     model: Option<&str>,
 ) -> Result<()> {
-    use octane_protocol::{Item, ItemId, ItemKind, ItemStatus, ToolCallId, TurnId};
+    use octane_protocol::{ItemKind, ToolCallId};
     use octane_tui::{App, AppEvent, Candidate, StatusLine, Submission};
 
     let contained = sandbox.is_contained();
 
+    // Resolved up front so the status line names a model that actually exists,
+    // rather than echoing back whatever was typed on the command line.
+    let registry = registry(workspace);
+    let selected = match model {
+        Some(reference) => registry.resolve(reference),
+        None => registry.resolve_role(None, octane_provider::Role::Primary),
+    };
+    let model_label = match &selected {
+        Ok(resolved) => resolved.reference.clone(),
+        Err(_) => "none".to_string(),
+    };
+
     let mut app = App::new(
-        StatusLine { mode, model: model.unwrap_or("unset").to_string(), ..Default::default() },
+        StatusLine { mode, model: model_label, ..Default::default() },
         workspace.to_string(),
         contained,
     )?;
+
+    // Configuration problems are said once, at the top, rather than surfacing as
+    // a confusing failure on the first prompt.
+    for error in registry.errors() {
+        app.push_event(&completed_static(ItemKind::Error { message: error.to_string() }))?;
+    }
+    if let Err(error) = &selected {
+        app.push_event(&completed_static(ItemKind::Error {
+            message: format!("{error}. Run `octane models` to see what is configured."),
+        }))?;
+    }
 
     app.set_commands(COMMANDS.iter().map(|(name, detail)| Candidate::new(*name, *detail)).collect());
     // Walked once at startup. A watcher would keep it live, but a stale entry
@@ -269,12 +312,6 @@ async fn interactive(
     // keystroke — the wrong trade for a completion list.
     app.set_files(index_files(workspace));
 
-    let completed = |kind: ItemKind| {
-        octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {
-            turn_id: TurnId::new(),
-            item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
-        })
-    };
 
     loop {
         app.draw()?;
@@ -287,9 +324,10 @@ async fn interactive(
             AppEvent::ModeChanged(_) => {}
 
             AppEvent::Submit(Submission::Command { name, .. }) => {
-                app.push_event(&completed(ItemKind::UserMessage { text: format!("/{name}") }))?;
+                app.push_event(&completed_static(ItemKind::UserMessage { text: format!("/{name}") }))?;
                 let body = match name.as_str() {
                     "help" => HELP.to_string(),
+                    "models" => render_models(workspace),
                     "clear" => {
                         app.clear_transcript();
                         continue;
@@ -297,14 +335,14 @@ async fn interactive(
                     "exit" | "quit" => break,
                     other => format!("Unknown command /{other}. Try /help."),
                 };
-                app.push_event(&completed(ItemKind::AgentMessage { text: body }))?;
+                app.push_event(&completed_static(ItemKind::AgentMessage { text: body }))?;
             }
 
             AppEvent::Submit(Submission::Shell { command }) => {
-                app.push_event(&completed(ItemKind::UserMessage {
+                app.push_event(&completed_static(ItemKind::UserMessage {
                     text: format!("!{command}"),
                 }))?;
-                app.push_event(&completed(ItemKind::ToolExecution {
+                app.push_event(&completed_static(ItemKind::ToolExecution {
                     call_id: ToolCallId::new(),
                     name: "bash".into(),
                     input: serde_json::json!({
@@ -314,35 +352,35 @@ async fn interactive(
                     .to_string(),
                 }))?;
                 let output = run_shell(&command, workspace, &sandbox).await;
-                app.push_event(&completed(ItemKind::AgentMessage { text: output }))?;
+                app.push_event(&completed_static(ItemKind::AgentMessage { text: output }))?;
             }
 
             AppEvent::Submit(Submission::Prompt { text, file_references }) => {
-                app.push_event(&completed(ItemKind::UserMessage { text }))?;
+                app.push_event(&completed_static(ItemKind::UserMessage { text }))?;
 
                 // `@path` attaches the file's contents. Extracting the paths
                 // without reading them made the affordance decorative.
                 for reference in &file_references {
                     match attach(reference, workspace).await {
                         Ok(attached) => {
-                            app.push_event(&completed(ItemKind::ToolExecution {
+                            app.push_event(&completed_static(ItemKind::ToolExecution {
                                 call_id: ToolCallId::new(),
                                 name: "read".into(),
                                 input: serde_json::json!({ "path": reference }).to_string(),
                             }))?;
-                            app.push_event(&completed(ItemKind::AgentMessage {
+                            app.push_event(&completed_static(ItemKind::AgentMessage {
                                 text: attached,
                             }))?;
                         }
                         Err(error) => {
-                            app.push_event(&completed(ItemKind::Error {
+                            app.push_event(&completed_static(ItemKind::Error {
                                 message: format!("@{reference}: {error}"),
                             }))?;
                         }
                     }
                 }
 
-                app.push_event(&completed(ItemKind::Error {
+                app.push_event(&completed_static(ItemKind::Error {
                     message: "No model is wired up yet. `!command`, `@path`, and `/help` work."
                         .into(),
                 }))?;
@@ -357,9 +395,93 @@ async fn interactive(
 /// Slash commands offered by completion.
 const COMMANDS: &[(&str, &str)] = &[
     ("/help", "show the key reference"),
+    ("/models", "list configured models"),
     ("/clear", "clear the transcript"),
     ("/exit", "quit octane"),
 ];
+
+/// Config roots, least specific first, so a project file wins.
+fn config_roots(workspace: &Utf8PathBuf) -> Vec<std::path::PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(std::path::PathBuf::from(home).join(".octane"));
+    }
+    roots.push(workspace.join(".octane").into_std_path_buf());
+    roots
+}
+
+fn registry(workspace: &Utf8PathBuf) -> octane_provider::Registry {
+    octane_provider::Registry::load(&config_roots(workspace))
+}
+
+/// Render the model list, shared by `octane models` and `/models`.
+fn render_models(workspace: &Utf8PathBuf) -> String {
+    let registry = registry(workspace);
+    let mut out = String::new();
+
+    for error in registry.errors() {
+        out.push_str(&format!("  ! {error}\n"));
+    }
+    if !registry.errors().is_empty() {
+        out.push('\n');
+    }
+
+    // Said plainly, because a provider that silently vanishes is how someone
+    // spends an hour on an unset variable they cannot see.
+    let unavailable = registry.unavailable();
+    if !unavailable.is_empty() {
+        out.push_str("not available\n");
+        for (provider, reason) in &unavailable {
+            out.push_str(&format!("  {provider:<28} {reason}\n"));
+        }
+        out.push('\n');
+    }
+
+    let models = registry.models();
+    if models.is_empty() && unavailable.is_empty() {
+        out.push_str(
+            "No providers are configured.\n\n\
+             Set an API key (ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY),\n\
+             or drop a provider file in .octane/providers/<name>.json:\n\n",
+        );
+        out.push_str(EXAMPLE_PROVIDER);
+        return out;
+    }
+
+    let mut provider = String::new();
+    for model in models {
+        if model.provider != provider {
+            provider = model.provider.clone();
+            out.push_str(&format!("\n{provider}\n"));
+        }
+        // The reference is what `--model` takes, so it leads.
+        out.push_str(&format!(
+            "  {:<28} {:<28} {}k ctx  {}\n",
+            model.reference,
+            model.display_name,
+            model.context_window / 1000,
+            model.api
+        ));
+    }
+    out
+}
+
+fn list_models(workspace: &Utf8PathBuf) -> Result<()> {
+    print!("{}", render_models(workspace));
+    Ok(())
+}
+
+const EXAMPLE_PROVIDER: &str = r#"{
+  "api": "openai-completion",
+  "baseUrl": "https://openrouter.ai/api/v1",
+  "auth": { "type": "apiKey", "value": "${OPENROUTER_API_KEY}" },
+  "defaults": { "primary": "sonnet", "faster": "haiku" },
+  "models": {
+    "sonnet": { "id": "anthropic/claude-sonnet-4.5", "contextWindow": 200000 },
+    "haiku":  { "id": "anthropic/claude-haiku-4.5" }
+  }
+}
+"#;
 
 /// Walk the workspace for `@` completion candidates.
 ///
@@ -457,4 +579,13 @@ async fn run_shell(
         Ok(outcome) => outcome.output,
         Err(error) => error.to_string(),
     }
+}
+
+/// Wrap an item as a completed protocol event.
+fn completed_static(kind: octane_protocol::ItemKind) -> octane_protocol::Event {
+    use octane_protocol::{Item, ItemId, ItemStatus, TurnId};
+    octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {
+        turn_id: TurnId::new(),
+        item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
+    })
 }
