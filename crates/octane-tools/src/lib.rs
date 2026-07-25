@@ -15,11 +15,20 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod builtin;
+pub mod paths;
 pub mod registry;
 pub mod tool;
+pub mod tracker;
 
+#[cfg(test)]
+mod tests_support;
+
+pub use builtin::{BashTool, EditTool, ReadTool, WriteTool, register_all};
+pub use paths::{ResolvedPath, resolve};
 pub use registry::ToolRegistry;
 pub use tool::{Tool, ToolContext, ToolError, ToolOutcome};
+pub use tracker::{FileTracker, WriteCheck};
 
 /// The built-in surface, named up front so its shape is visible before it exists.
 pub const BUILTIN_TOOL_NAMES: &[&str] = &[

@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 octane-protocol.workspace = true
 octane-provider.workspace = true
+octane-sandbox.workspace = true
 
 async-trait.workspace = true
 camino.workspace = true
@@ -18,6 +19,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tokio-util = "0.7"
+
+[dev-dependencies]
+octane-permission.workspace = true
+tempfile = "3"
 
 [lints]
 workspace = true

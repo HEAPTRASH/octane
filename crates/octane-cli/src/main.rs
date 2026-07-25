@@ -68,6 +68,18 @@ enum Command {
     /// the two questions users actually have, and both should be answerable
     /// without starting a session.
     Doctor,
+
+    /// Run one tool directly, bypassing the model.
+    ///
+    /// The fastest way to answer "is the sandbox actually on?" and "why did that
+    /// edit fail?" without spending a token. Permissions and containment apply
+    /// exactly as they would mid-session.
+    Tool {
+        /// Tool name, e.g. `read` or `bash`.
+        name: String,
+        /// Arguments as JSON, e.g. '{"path":"src/main.rs"}'.
+        input: String,
+    },
 }
 
 fn main() -> Result<()> {
@@ -96,6 +108,12 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Doctor) => doctor(&workspace, &sandbox, mode, cli.model.as_deref()),
+        Some(Command::Tool { name, input }) => {
+            // Built here rather than in main so the async runtime is only started
+            // when something actually needs it.
+            tokio::runtime::Runtime::new()?
+                .block_on(run_tool(&name, &input, &workspace, sandbox, mode))
+        }
         None => {
             // The interactive TUI is not wired up yet. Saying so plainly beats a
             // panic or a silent no-op.
@@ -156,4 +174,72 @@ fn doctor(
     println!("  {}", octane_memory::LOCAL_MEMORY_FILENAME);
 
     Ok(())
+}
+
+/// Execute a single tool, applying the same policy and containment a turn would.
+async fn run_tool(
+    name: &str,
+    input: &str,
+    workspace: &Utf8PathBuf,
+    sandbox: SandboxPolicy,
+    mode: PermissionMode,
+) -> Result<()> {
+    use octane_permission::{Decision, Policy, Resource, Scope};
+    use octane_protocol::{SessionId, ToolCallId};
+    use octane_tools::{ToolContext, ToolRegistry};
+
+    let tracker = std::sync::Arc::new(octane_tools::FileTracker::new());
+    let mut registry = ToolRegistry::new();
+    octane_tools::register_all(&mut registry, tracker, sandbox);
+
+    let tool = registry.get(name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no tool named {name:?}. Available: {}",
+            registry.names().collect::<Vec<_>>().join(", ")
+        )
+    })?;
+
+    let ctx = ToolContext {
+        session_id: SessionId::new(),
+        call_id: ToolCallId::new(),
+        agent: "build".into(),
+        workspace: workspace.clone(),
+        cwd: workspace.clone(),
+        cancel: Default::default(),
+    };
+
+    let (policy, rule_errors) = Policy::builder()
+        .workspace_root(workspace.as_str())
+        .with_baseline_denies()
+        .ask("command(*)", Scope::User)
+        .build();
+    for error in &rule_errors {
+        tracing::warn!("ignoring malformed permission rule: {error}");
+    }
+
+    // Same order as the turn runner: resolve every resource before executing, so
+    // a refusal happens before anything runs rather than halfway through.
+    for resource in tool.required_permissions(input, &ctx) {
+        let Ok(parsed) = resource.parse::<Resource>() else {
+            continue;
+        };
+        let verdict = policy.evaluate(&parsed, mode);
+        match verdict.decision {
+            Decision::Allow => {}
+            Decision::Deny => anyhow::bail!("denied: {parsed} ({:?})", verdict.reason),
+            // No TUI to prompt with yet. Refusing beats silently proceeding.
+            Decision::Ask => anyhow::bail!(
+                "{parsed} needs approval, and this subcommand cannot prompt. \
+                 Add an allow rule, or re-run with --mode accept-edits for file writes."
+            ),
+        }
+    }
+
+    match tool.execute(input, &ctx).await {
+        Ok(outcome) => {
+            println!("{}", outcome.output);
+            Ok(())
+        }
+        Err(error) => anyhow::bail!("{error}"),
+    }
 }

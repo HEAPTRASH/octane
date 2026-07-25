@@ -6,11 +6,15 @@ Design notes and the survey the architecture is derived from are in [`RESEARCH.m
 
 ## Status
 
-Early. The subsystems below are implemented and tested; the interactive session is not wired up yet.
+Early. The subsystems below are implemented and tested. `read`, `write`, `edit`, and `bash` work and run under real OS containment; the interactive session is not wired up yet.
 
 ```
-$ octane doctor      # inspect resolved config: sandbox, writable roots, modes
+$ octane doctor                                        # resolved config: sandbox, writable roots, mode
+$ octane tool read '{"path":"src/main.rs","limit":40}' # run one tool, no model involved
+$ octane tool bash '{"command":"cargo test","description":"runs the tests"}'
 ```
+
+`octane tool` applies the same policy and containment a real turn would, which makes "is the sandbox actually on?" answerable without spending a token.
 
 ## Getting started
 
@@ -73,8 +77,10 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 146 tests
+cargo test --workspace       # 216 tests
 cargo clippy --workspace --all-targets
 ```
 
 Tests are behavioural and named for the property they protect, e.g. `a_path_with_shell_metacharacters_cannot_reach_the_profile`, `a_session_grant_cannot_survive_a_switch_to_plan`, `changing_output_is_progress_not_a_loop`.
+
+`crates/octane-tools/tests/sandbox_execution.rs` goes further and asserts the security claim itself against the real kernel sandbox — that a write outside the writable roots, to `.git/hooks/`, or to the network does not land. `danger_full_access_is_genuinely_unconfined` is the negative control: the same write succeeds with containment off, which is what makes the other results evidence rather than coincidence. macOS-only, since Seatbelt is the only backend implemented.

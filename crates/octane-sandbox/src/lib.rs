@@ -26,7 +26,7 @@ pub mod policy;
 pub mod seatbelt;
 
 pub use denial::is_likely_sandbox_denial;
-pub use policy::{SandboxPolicy, WritableRoot};
+pub use policy::{NetworkPolicy, SandboxPolicy, WritableRoot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SandboxError {
