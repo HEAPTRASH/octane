@@ -6,7 +6,7 @@ Design notes and the survey the architecture is derived from are in [`RESEARCH.m
 
 ## Status
 
-Early, but it works end to end. Seven tools — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment, a streaming TUI, and a connected agent loop. Verified against Gemini 3.6 Flash through OpenRouter: prompt → streamed tool call → sandboxed execution → result fed back → answer.
+Early, but it works end to end. Eight tools — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list`, `task` — with `bash` under real OS containment, a streaming TUI that renders markdown, and a connected agent loop that can fan work out to subagents. Verified against Gemini 3.6 Flash through OpenRouter: prompt → streamed tool call → sandboxed execution → result fed back → answer, and a `/cs` search that delegated to two research subagents and came back with file-and-line citations.
 
 ```
 $ octane doctor                                        # resolved config: sandbox, writable roots, mode
@@ -50,6 +50,7 @@ One responsibility per crate. The dependency direction is strictly one-way — n
 | `octane-memory` | `OCTANE.md` / `AGENTS.md` layering and `@imports` | skills |
 | `octane-skills` | Agent Skills discovery, progressive disclosure | activation policy |
 | `octane-commands` | slash command discovery and template expansion | running the shell |
+| `octane-config` | `.octane/` discovery, `settings.toml`, agent definitions | what any setting means |
 | `octane-mcp` | MCP JSON-RPC lifecycle, stdio transport, tool adapter | permission decisions |
 | `octane-core` | the ReAct loop, agents, prompt assembly, stop conditions | **any domain logic** |
 | `octane-tui` | terminal client: composer, keymap, event rendering, approvals | agent logic |
@@ -71,7 +72,21 @@ Frames are wrapped in synchronized-output escapes (`CSI ?2026h`/`l`) so terminal
 
 `@path` attaches a file, `!command` runs a shell command, `/` opens commands. Both `@` and `/` complete as you type, with **subsequence matching** rather than prefix — `@octcli` finds `crates/octane-cli/src/main.rs`, because prefix matching would require knowing where a file lives before you can ask for it.
 
+The composer grows as you fill it, sized by **wrapped rows rather than newline count** — text that wraps takes vertical space whether or not you pressed Enter, and a box that only counts newlines stops growing exactly when you need it to.
+
 Newlines have three bindings because one is not portable. `shift+enter` is what people reach for, but most terminals send a bare CR for it, indistinguishable from Enter, unless the keyboard enhancement protocol is negotiated — octane requests it at startup, so it works on Kitty, Ghostty, WezTerm, foot, and recent iTerm2. `alt+enter` works essentially everywhere. A trailing `\` before Enter needs no terminal support at all.
+
+### Markdown
+
+Models answer in markdown whether or not anything renders it, so the transcript does: headings, lists, quotes, rules, emphasis, inline code, and fenced blocks with the language labelled and the body set off from prose.
+
+One deliberate divergence from CommonMark: **`_` never opens emphasis.** By the spec `a_variable_name` is unambiguous and `_emphasis_` is valid, but a transcript full of identifiers gets mangled the moment a line contains two underscores in the wrong places. `*` still works, and models reach for it anyway.
+
+### Pickers
+
+`/connect` opens a modal list of every built-in provider with its credential state — ready ones first, ones needing a variable below with the variable named. Type to filter, arrows to move, Enter to write the file. Asking "what can I connect to?" and connecting are the same interaction, because the old form needed the provider's name before it would tell you the provider's name.
+
+The picker is generic over what it selects, so `/settings` and model selection reuse it. It is modal — it owns every key while open — except `ctrl+c`, which must always exit.
 
 ## Look and feel
 
@@ -80,6 +95,49 @@ Monster-inspired: black base, acid green (`#95D600`, the brand's own value), hig
 Three colour tiers, detected rather than assumed: exact hexes on truecolor, nearest xterm-256 indices otherwise, and bold/dim only under `NO_COLOR` or `TERM=dumb`. `NO_COLOR` is honoured because people set it for a reason.
 
 Glyphs are chosen for **width safety**, not just availability. A character that renders double-width in one terminal and single in another silently destroys every box and aligned column, and the breakage is invisible until someone reports it from a terminal you don't have. Everything comes from ranges that are unambiguously narrow — box drawing, block elements, geometric shapes, braille, arrows. Emoji, Nerd Font glyphs, and emoji-presentation symbols like `⚡` and `✔` are excluded; `✓` is text presentation and safe, its neighbour is not. A full ASCII set covers terminals without dependable Unicode, and it reaches the transcript and status line, not just the banner.
+
+## Configuration
+
+Everything configurable lives under `.octane/`, in two scopes: `~/.octane/` for you and `.octane/` in the project for the work. Project wins, key by key, so a repo can pin its model without discarding your keybindings.
+
+```
+.octane/
+├── settings.toml        # model, permission mode, thinking, writable roots
+├── providers/*.json     # connections and their models
+└── agents/*.md          # agent definitions: YAML front matter, markdown prompt
+```
+
+TOML for settings, JSON for providers. Not a taste call: settings are hand-edited and want comments, which JSON cannot carry; provider files are generated by `octane connect` and mirror upstream JSON formats, where TOML's tables would make the nesting worse. `serde` covers both, so the cost is one dependency.
+
+`/settings` prints the resolved values, then every settings file in override order marked present or absent — so a setting that is not taking effect can be traced to the file that is not there. A malformed file is reported by name and skipped, rather than taking the whole config down with it.
+
+## Agents
+
+An agent is a system prompt, a tool subset, and a model, defined in markdown:
+
+```markdown
+---
+name: research
+description: Searches the codebase and reports findings with citations
+tools: [read, glob, grep, list]
+---
+
+Report file paths and line numbers. Never speculate about code you have not read.
+```
+
+Six ship built in. Two are **primary** — `build` (the default) and `plan` (read-only, for working out an approach before touching anything). Four are **subagents**, reachable only through delegation: `research`, `test`, `code`, and `critic`.
+
+The `task` tool is what makes them reachable. It takes an agent name and a prompt, runs that agent in its own thread with its own tool set, and returns only the final report. The separate context is the point — a search that reads thirty files should cost the parent turn one paragraph, not thirty files. Primary agents are deliberately absent from `task`'s schema, since an agent that can delegate to itself will.
+
+`/cs` is the built-in application of it: a codebase search that fans out to several `research` subagents in parallel and merges what they cite.
+
+```
+/agents            # what is defined, and from which scope
+/cs where is SSE parsed
+/thinking          # cycle reasoning visibility: auto / off / low / medium / high
+```
+
+`/thinking` controls both display and request. Not every endpoint honours the off switch — some models return `Reasoning is mandatory for this endpoint and cannot be disabled`, which octane reports rather than silently ignoring.
 
 ## Providers and models
 
@@ -93,7 +151,7 @@ octane --model corp/claude       # provider/model
 octane --model sonnet            # bare key, when unambiguous
 ```
 
-`/connect` and `/models` do the same from inside the TUI.
+From inside the TUI, `/connect` opens the picker described above and `/models` lists what is configured.
 
 The format follows [Junie's custom-LLM profiles](https://junie.jetbrains.com/docs/custom-llm-models.html) for `${VAR}` references and merge semantics, and catwalk's `models` map so one file covers many models rather than Junie's file-per-model.
 
@@ -152,11 +210,14 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 - **There is no "always allow" key.** A grant that broad should be a deliberate config edit, not one keystroke away from a prompt someone is trying to dismiss.
 - **Esc interrupts; it does not exit.** Those are different intentions, and conflating them loses sessions to a reflex. `ctrl+d` exits only on an empty composer for the same reason.
 - **Loop detection hashes `(tool, input, output)`.** Including the output is what makes it correct: a repeated call whose output *changed* is progress — polling a build, tailing a log.
+- **A subagent returns its report, not its transcript.** Delegation only pays for itself if the parent context stays small; handing back every intermediate step would cost more than not delegating.
+- **A session grant outranks a configured `ask`, but a configured `allow` does not.** Both are "less oversight than the rule says", and only one of them was a decision the user made about this specific action, this session.
+- **Provider files hold `${VAR}` references, never keys.** That is what makes them committable, which is what makes a team's model config reviewable instead of passed around.
 
 ## Testing
 
 ```bash
-cargo test --workspace       # 585 tests
+cargo test --workspace       # 683 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

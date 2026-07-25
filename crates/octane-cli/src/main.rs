@@ -1013,11 +1013,21 @@ fn render_agents(workspace: &Utf8PathBuf) -> String {
             ));
             last_mode = Some(mode);
         }
+        // First sentence only. A description is written for the model choosing
+        // an agent, so it carries "use when..." guidance the model needs and a
+        // human scanning the list does not — and the full text is wide enough
+        // that the transcript clips it mid-word anyway.
+        let summary = agent
+            .frontmatter
+            .description
+            .split_inclusive('.')
+            .next()
+            .unwrap_or(&agent.frontmatter.description)
+            .trim();
         out.push_str(&format!(
-            "  {:<10} {:<10} {}\n",
+            "  {:<10} {:<10} {summary}\n",
             agent.name,
             agent.scope.label(),
-            agent.frontmatter.description
         ));
     }
 
@@ -1050,11 +1060,23 @@ fn render_settings(workspace: &Utf8PathBuf) -> String {
     }
 
     out.push_str("Files, later overriding earlier\n\n");
-    for root in &roots {
-        let path = root.join(octane_config::settings::SETTINGS_FILE);
+    let paths: Vec<_> = roots
+        .iter()
+        .map(|root| root.join(octane_config::settings::SETTINGS_FILE))
+        .collect();
+    // Padded past the longest path rather than to a guessed width: a project
+    // nested a few directories deep overruns any fixed column, and the state
+    // then runs into the path with no gap.
+    let column = paths
+        .iter()
+        .map(|path| path.as_str().chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+    for path in &paths {
         out.push_str(&format!(
-            "  {:<52} {}\n",
-            path,
+            "  {:<column$} {}\n",
+            path.as_str(),
             if path.is_file() { "present" } else { "absent" }
         ));
     }
