@@ -116,8 +116,9 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
         }
 
         ItemKind::AgentMessage { text } => {
-            let mut lines: Vec<Line<'static>> =
-                text.lines().map(|line| Line::raw(line.to_string())).collect();
+            // Models answer in markdown whether or not asked to, so showing the
+            // raw source is showing the wrong thing.
+            let mut lines = crate::markdown::render(text, theme, glyphs);
             lines.push(Line::default());
             lines
         }

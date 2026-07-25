@@ -1092,6 +1092,7 @@ name = "octane-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "camino",
  "clap",
  "crossterm",
@@ -1103,11 +1104,13 @@ dependencies = [
  "octane-protocol",
  "octane-provider",
  "octane-sandbox",
+ "octane-skills",
  "octane-tools",
  "octane-tui",
  "ratatui",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1156,6 +1159,7 @@ dependencies = [
  "camino",
  "futures",
  "octane-commands",
+ "octane-config",
  "octane-context",
  "octane-memory",
  "octane-permission",

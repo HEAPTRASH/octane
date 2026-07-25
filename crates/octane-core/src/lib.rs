@@ -28,6 +28,7 @@ pub mod model_source;
 pub mod loop_guard;
 pub mod prompt;
 pub mod step;
+pub mod task;
 pub mod turn;
 
 pub use agent::{Agent, AgentKind};
@@ -36,6 +37,7 @@ pub use model_source::ModelStepSource;
 pub use loop_guard::LoopGuard;
 pub use prompt::PromptAssembler;
 pub use step::{StepDecision, StopReason};
+pub use task::{Delegate, TaskTool};
 pub use turn::{Approver, TurnRunner};
 
 #[derive(Debug, thiserror::Error)]

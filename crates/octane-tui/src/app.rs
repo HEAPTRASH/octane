@@ -301,7 +301,8 @@ impl App {
 
         let _ = crossterm::execute!(io::stdout(), BeginSynchronizedUpdate);
 
-        let composer_rows = composer_height(&self.composer);
+        let width = self.terminal.size().map(|size| size.width).unwrap_or(80);
+        let composer_rows = composer_height(&self.composer, width);
         let approval_rows = self
             .pending_approval
             .as_ref()
@@ -340,6 +341,10 @@ impl App {
 
             // Transcript, or the empty state.
             let body = chunks[1];
+            // Cleared first: `Paragraph` writes only the cells it covers, so a
+            // line shorter than the one it replaces leaves the old tail behind.
+            // That is the stray-character bleed at the end of scrolled lines.
+            frame.render_widget(Clear, body);
             if transcript.is_empty() {
                 frame.render_widget(empty_state(&theme, &glyphs, body.width), body);
             } else {
@@ -372,8 +377,12 @@ impl App {
                 .iter()
                 .map(|line| Line::raw(line.to_string()))
                 .collect();
+            frame.render_widget(Clear, composer_area);
             frame.render_widget(
-                Paragraph::new(composer_lines).block(
+                Paragraph::new(composer_lines)
+                    // Wrapped, or a long line is simply cut off at the border.
+                    .wrap(ratatui::widgets::Wrap { trim: false })
+                    .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .border_style(Style::default().fg(theme.accent))
@@ -385,10 +394,20 @@ impl App {
                 composer_area,
             );
 
+            // The caret follows the wrap too, or it sits at the end of a row the
+            // text has already flowed past.
+            let usable = usize::from(composer_area.width.saturating_sub(3)).max(1);
             let (line, column) = composer.cursor_position();
+            let wrapped_before: usize = composer
+                .lines()
+                .iter()
+                .take(line)
+                .map(|text| text.chars().count().div_ceil(usable).max(1))
+                .sum();
+            let row = wrapped_before + column / usable;
             frame.set_cursor_position((
-                composer_area.x + 1 + column as u16,
-                composer_area.y + 1 + line as u16,
+                composer_area.x + 1 + (column % usable) as u16,
+                composer_area.y + 1 + u16::try_from(row).unwrap_or(0),
             ));
 
             frame.render_widget(status_paragraph(&status, &theme, &glyphs), chunks[5]);
@@ -779,8 +798,23 @@ fn status_paragraph<'a>(
     Paragraph::new(Line::from(spans))
 }
 
-fn composer_height(composer: &Composer) -> u16 {
-    u16::try_from(composer.lines().len()).unwrap_or(1).clamp(1, MAX_COMPOSER_ROWS)
+/// Rows the composer needs at a given width.
+///
+/// Counts *wrapped* rows, not newlines. A single long line still occupies
+/// several rows on screen, and sizing by newline count alone leaves the box one
+/// row tall while the text runs off the end of it — which is what happens the
+/// first time anyone pastes a paragraph.
+fn composer_height(composer: &Composer, width: u16) -> u16 {
+    // Two columns of border plus one of padding.
+    let usable = usize::from(width.saturating_sub(3)).max(1);
+
+    let rows: usize = composer
+        .lines()
+        .iter()
+        .map(|line| line.chars().count().div_ceil(usable).max(1))
+        .sum();
+
+    u16::try_from(rows).unwrap_or(MAX_COMPOSER_ROWS).clamp(1, MAX_COMPOSER_ROWS)
 }
 
 fn approval_height(prompt: &ApprovalPrompt) -> u16 {
@@ -814,12 +848,44 @@ mod tests {
     #[test]
     fn the_composer_grows_with_the_draft() {
         let mut composer = Composer::new();
-        assert_eq!(composer_height(&composer), 1);
+        assert_eq!(composer_height(&composer, 80), 1);
 
         // This is what shift+enter does, and the box must follow it.
         for expected in 2..=6 {
             composer.newline();
-            assert_eq!(composer_height(&composer), expected);
+            assert_eq!(composer_height(&composer, 80), expected);
+        }
+    }
+
+    #[test]
+    fn a_long_line_grows_the_box_by_wrapping() {
+        // The bug this fixes: sizing by newline count leaves the box one row
+        // tall while a pasted paragraph runs off the end of it.
+        let mut composer = Composer::new();
+        composer.insert_str(&"x".repeat(200));
+        assert!(
+            composer_height(&composer, 40) > 1,
+            "a wrapped line must grow the box"
+        );
+    }
+
+    #[test]
+    fn wrapping_is_measured_against_the_usable_width() {
+        let mut composer = Composer::new();
+        composer.insert_str(&"x".repeat(77));
+        // 80 wide minus two borders and a column of padding.
+        assert_eq!(composer_height(&composer, 80), 1);
+
+        composer.insert_str("xx");
+        assert_eq!(composer_height(&composer, 80), 2);
+    }
+
+    #[test]
+    fn a_narrow_terminal_does_not_divide_by_zero() {
+        let mut composer = Composer::new();
+        composer.insert_str("some text");
+        for width in 0..=4 {
+            assert!(composer_height(&composer, width) >= 1);
         }
     }
 
@@ -830,7 +896,7 @@ mod tests {
             composer.newline();
         }
         assert_eq!(
-            composer_height(&composer),
+            composer_height(&composer, 80),
             MAX_COMPOSER_ROWS,
             "the transcript must keep some rows"
         );

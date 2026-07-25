@@ -54,6 +54,11 @@ pub struct Glyphs {
     /// Output tokens.
     pub arrow_down: &'static str,
 
+    /// List bullet.
+    pub bullet: &'static str,
+    /// Left margin for code blocks and quotes.
+    pub bar: &'static str,
+
     /// Decorative slashes. Three of these is the Monster claw motif, and it is
     /// the one piece of branding that costs nothing to render.
     pub claw: &'static str,
@@ -78,6 +83,9 @@ pub const UNICODE: Glyphs = Glyphs {
 
     arrow_up: "\u{2191}",   // ↑
     arrow_down: "\u{2193}", // ↓
+
+    bullet: "\u{2022}", // •
+    bar: "\u{2502}",    // │
 
     claw: "\u{2571}", // ╱ box drawing diagonal
 
@@ -113,6 +121,9 @@ pub const ASCII: Glyphs = Glyphs {
     arrow_up: "^",
     arrow_down: "v",
 
+    bullet: "*",
+    bar: "|",
+
     claw: "/",
 
     spinner: &["-", "\\", "|", "/"],
@@ -145,6 +156,11 @@ impl Glyphs {
     /// A horizontal rule of the given width.
     pub fn rule(&self, width: usize) -> String {
         self.rule.repeat(width)
+    }
+
+    /// Left margin glyph for code blocks and quotes.
+    pub fn code_bar(&self) -> &'static str {
+        self.bar
     }
 
     /// The claw motif: three slashes.
@@ -196,7 +212,7 @@ mod tests {
         for set in [UNICODE, ASCII] {
             for glyph in [
                 set.prompt, set.tool, set.edit, set.error, set.question, set.notice, set.rule,
-                set.separator, set.arrow_up, set.arrow_down, set.claw,
+                set.separator, set.arrow_up, set.arrow_down, set.claw, set.bullet, set.bar,
             ] {
                 assert!(single_width(glyph), "{glyph:?} must be one cell");
             }

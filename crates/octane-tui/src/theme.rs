@@ -85,6 +85,8 @@ pub struct Theme {
     pub dim: Color,
     /// Brand green, for the logo and accents.
     pub accent: Color,
+    /// Code, inline and fenced.
+    pub code: Color,
 
     pub added: Color,
     pub removed: Color,
@@ -110,6 +112,7 @@ impl Theme {
                 warning: VOLT,
                 dim: ASH,
                 accent: ACID,
+                code: CITRON,
                 added: LIME,
                 removed: FLARE,
             },
@@ -128,6 +131,7 @@ impl Theme {
                 warning: Color::Indexed(227),
                 dim: Color::Indexed(244),
                 accent: Color::Indexed(154),
+                code: Color::Indexed(186),
                 added: Color::Indexed(118),
                 removed: Color::Indexed(202),
             },
@@ -145,6 +149,7 @@ impl Theme {
                 warning: Color::Reset,
                 dim: Color::Reset,
                 accent: Color::Reset,
+                code: Color::Reset,
                 added: Color::Reset,
                 removed: Color::Reset,
             },

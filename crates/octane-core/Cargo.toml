@@ -17,6 +17,7 @@ octane-context.workspace = true
 octane-memory.workspace = true
 octane-skills.workspace = true
 octane-commands.workspace = true
+octane-config.workspace = true
 async-trait.workspace = true
 camino.workspace = true
 futures.workspace = true

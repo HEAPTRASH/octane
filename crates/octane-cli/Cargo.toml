@@ -20,12 +20,15 @@ octane-permission.workspace = true
 octane-protocol.workspace = true
 octane-provider.workspace = true
 octane-sandbox.workspace = true
+octane-skills.workspace = true
 octane-tools.workspace = true
 octane-tui.workspace = true
 ratatui.workspace = true
 serde_json.workspace = true
 
 anyhow.workspace = true
+async-trait.workspace = true
+tokio-util = "0.7"
 camino.workspace = true
 clap.workspace = true
 crossterm.workspace = true

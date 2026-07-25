@@ -39,6 +39,7 @@ pub mod completion;
 pub mod composer;
 pub mod glyphs;
 pub mod keymap;
+pub mod markdown;
 pub mod render;
 pub mod status;
 pub mod theme;

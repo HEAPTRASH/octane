@@ -378,7 +378,13 @@ async fn interactive(
         }))?;
     }
 
-    app.set_commands(COMMANDS.iter().map(|(name, detail)| Candidate::new(*name, *detail)).collect());
+    // Commands plus every discovered skill, so `/` suggests both. Skills are
+    // offered as commands rather than a separate trigger: a user reaching for a
+    // capability does not care whether it was built in or dropped in a folder.
+    let mut commands: Vec<Candidate> =
+        COMMANDS.iter().map(|(name, detail)| Candidate::new(*name, *detail)).collect();
+    commands.extend(skill_candidates(workspace));
+    app.set_commands(commands);
     // Walked once at startup. A watcher would keep it live, but a stale entry
     // costs a "no such file" and a rescan costs a directory walk on every
     // keystroke — the wrong trade for a completion list.
@@ -395,6 +401,35 @@ async fn interactive(
             AppEvent::Interrupt => {}
             AppEvent::ModeChanged(_) => {}
 
+            AppEvent::Submit(Submission::Command { name, args })
+                if name == "cs" && !args.trim().is_empty() =>
+            {
+                app.push_event(&completed_static(ItemKind::UserMessage {
+                    text: format!("/cs {args}"),
+                }))?;
+
+                let Some(model) = session.as_ref() else {
+                    app.push_event(&completed_static(ItemKind::Error {
+                        message: "No model is configured. Run `/connect` to set one up.".into(),
+                    }))?;
+                    continue;
+                };
+
+                history.push(octane_protocol::Message::text(
+                    octane_protocol::Role::User,
+                    codebase_search_prompt(&args),
+                ));
+                let session_ctx = Session {
+                    model,
+                    workspace,
+                    sandbox: &sandbox,
+                    mode,
+                    thinking,
+                    permissions: &settings.permissions,
+                };
+                run_turn(&mut app, &session_ctx, &mut history).await?;
+            }
+
             AppEvent::Submit(Submission::Command { name, args }) => {
                 let echoed =
                     if args.is_empty() { format!("/{name}") } else { format!("/{name} {args}") };
@@ -405,6 +440,10 @@ async fn interactive(
                     "models" => render_models(workspace),
                     "connect" => render_connect_list(),
                     "agents" => render_agents(workspace),
+                    other if skill_body(workspace, other).is_some() => {
+                        // Tier 2: the body is read only now, on activation.
+                        skill_body(workspace, other).unwrap_or_default()
+                    }
                     "settings" => render_settings(workspace),
                     "clear" => {
                         app.clear_transcript();
@@ -493,6 +532,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/models", "list configured models"),
     ("/connect", "set up a provider"),
     ("/thinking", "show or set reasoning: off, low, medium, high"),
+    ("/cs", "search the codebase with parallel research agents"),
     ("/agents", "list available agents"),
     ("/settings", "show resolved settings"),
     ("/clear", "clear the transcript"),
@@ -764,6 +804,64 @@ fn completed_static(kind: octane_protocol::ItemKind) -> octane_protocol::Event {
     })
 }
 
+/// Load a skill's body, if one by that name exists.
+///
+/// Tier 2 of progressive disclosure: read on activation, never at startup.
+fn skill_body(workspace: &Utf8PathBuf, name: &str) -> Option<String> {
+    let roots = octane_config::roots(workspace);
+    let dirs: Vec<(camino::Utf8PathBuf, bool)> = roots
+        .iter()
+        .enumerate()
+        .map(|(index, root)| (root.join("skills"), index + 1 == roots.len()))
+        .collect();
+
+    let (skills, _) = octane_skills::discover(&dirs);
+    let skill = skills.into_iter().find(|skill| skill.name() == name)?;
+    skill.load_body().ok().map(|body| body.render())
+}
+
+/// Discovered skills, offered in `/` completion.
+///
+/// Tier-1 only: name and description. Loading a body here would defeat
+/// progressive disclosure, which is the whole reason the format is tiered
+/// (`RESEARCH.md` §D).
+fn skill_candidates(workspace: &Utf8PathBuf) -> Vec<octane_tui::Candidate> {
+    let dirs: Vec<(camino::Utf8PathBuf, bool)> = octane_config::roots(workspace)
+        .into_iter()
+        .enumerate()
+        .map(|(index, root)| {
+            let is_project = index + 1 == octane_config::roots(workspace).len();
+            (root.join("skills"), is_project)
+        })
+        .collect();
+
+    let (skills, _errors) = octane_skills::discover(&dirs);
+    skills
+        .into_iter()
+        .map(|skill| {
+            let summary = skill.frontmatter.description.clone();
+            // Truncated to one readable line: the popup is a menu, not the docs.
+            let summary = summary.chars().take(70).collect::<String>();
+            octane_tui::Candidate::new(format!("/{}", skill.name()), summary)
+        })
+        .collect()
+}
+
+/// `/cs <query>` — codebase search by fan-out.
+///
+/// Expands to a prompt rather than being a code path, which is what keeps the
+/// extension model declarative (`RESEARCH.md` §F): anything octane can be told
+/// to do, a user can put in their own command file.
+///
+/// The instruction to search several ways at once is the point. A single grep
+/// finds what you already knew to look for; the interesting misses are the
+/// places something is named differently, and only parallel angles catch those.
+fn codebase_search_prompt(query: &str) -> String {
+    format!(
+        "Find everything relevant to this in the codebase, then explain it:\n\n         {query}\n\n         Use the `task` tool with the `research` agent, and launch several in one          message so they run concurrently. Give each a different angle — by symbol          name, by file or directory, by the concept described in prose, by tests          that exercise it. A single search finds only what you already knew to look          for; the useful misses are where something is named differently.\n\n         Then synthesise. Report:\n         - where the thing lives, as `path:line`\n         - how the pieces relate, not a list of what each file contains\n         - anything that looks like it should be involved but is not\n\n         If it is genuinely absent, say so plainly rather than reporting the          nearest match as though it were the answer."
+    )
+}
+
 /// `/agents` — what can be delegated to, and where each came from.
 fn render_agents(workspace: &Utf8PathBuf) -> String {
     let (agents, errors) = octane_config::discover_agents(&octane_config::roots(workspace));
@@ -917,7 +1015,6 @@ async fn run_turn(
 ) -> Result<()> {
     let Session { model, workspace, sandbox, mode, thinking, permissions } = *session;
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
-    use octane_permission::{Policy, Scope};
     use octane_protocol::TurnId;
     use octane_tools::ToolRegistry;
     use octane_tui::{Activity, TuiApprover};
@@ -925,30 +1022,33 @@ async fn run_turn(
     let tracker = std::sync::Arc::new(octane_tools::FileTracker::new());
     let mut registry = ToolRegistry::new();
     octane_tools::register_all(&mut registry, tracker, sandbox.clone());
-    let registry = std::sync::Arc::new(registry);
 
-    // Configured rules layer on the baseline. Deny still beats everything, so a
-    // permissive `allow` in a project file cannot widen past the baseline denies.
-    let mut builder = Policy::builder()
-        .workspace_root(workspace.as_str())
-        .with_baseline_denies();
-    for rule in &permissions.deny {
-        builder = builder.deny(rule, Scope::Project);
-    }
-    for rule in &permissions.ask {
-        builder = builder.ask(rule, Scope::Project);
-    }
-    for rule in &permissions.allow {
-        builder = builder.allow(rule, Scope::Project);
-    }
-    // Nothing configured at all still asks before running commands.
-    if permissions.ask.is_empty() && permissions.allow.is_empty() {
-        builder = builder.ask("command(*)", Scope::User);
-    }
-    let (policy, _errors) = builder.build();
-
+    let (policy, _errors) = build_policy(workspace, permissions);
     let (approver, mut approvals) = TuiApprover::new();
     let (sink, mut events) = EventSink::new(TurnId::new());
+
+    // Subagent progress rides its own channel, so their tool calls appear in the
+    // transcript while their reasoning and prose do not — the latter is the
+    // whole point of delegating.
+    let (progress, mut subagent_progress) = tokio::sync::mpsc::unbounded_channel();
+
+    // `task` is registered for the primary agent only. The subagent runner
+    // builds its own registry without it, which is what stops recursion.
+    let (agents, _agent_errors) =
+        octane_config::discover_agents(&octane_config::roots(workspace));
+    registry.register(std::sync::Arc::new(octane_core::TaskTool::new(
+        agents,
+        std::sync::Arc::new(SubagentRunner {
+            model: model.clone(),
+            workspace: workspace.clone(),
+            sandbox: sandbox.clone(),
+            policy_permissions: permissions.clone(),
+            approver: approver.clone(),
+            mode,
+            progress,
+        }),
+    )));
+    let registry = std::sync::Arc::new(registry);
 
     let budget = octane_context::Budget::for_model(model.info());
     let agent = octane_core::Agent::build();
@@ -998,6 +1098,10 @@ async fn run_turn(
                 app.set_approval(prompt, responder);
             }
 
+            Some(event) = subagent_progress.recv() => {
+                app.push_event(&event)?;
+            }
+
             finished = &mut turn => {
                 break finished.map_err(|error| anyhow::anyhow!("turn panicked: {error}"))?;
             }
@@ -1034,4 +1138,157 @@ async fn run_turn(
     app.status_mut().context_used = used as f64 / window as f64;
 
     Ok(())
+}
+
+/// Runs subagents by building a real turn for each.
+///
+/// The subagent gets its own registry filtered to the tools its definition
+/// permits, its own history, and its own event sink — the last of which is what
+/// keeps its transcript out of the main context. Only the final message crosses
+/// back, which is the entire point of delegation.
+struct SubagentRunner {
+    model: std::sync::Arc<dyn octane_provider::LanguageModel>,
+    workspace: Utf8PathBuf,
+    sandbox: SandboxPolicy,
+    policy_permissions: octane_config::settings::Permissions,
+    /// Approvals go to the same UI as the parent's, so a subagent asking for
+    /// permission is not a silent hang.
+    approver: std::sync::Arc<dyn octane_core::Approver>,
+    mode: PermissionMode,
+    /// Progress from subagents, so the UI can show what they are doing.
+    progress: tokio::sync::mpsc::UnboundedSender<octane_protocol::Event>,
+}
+
+#[async_trait::async_trait]
+impl octane_core::Delegate for SubagentRunner {
+    async fn run(
+        &self,
+        agent: &octane_config::AgentDefinition,
+        prompt: &str,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<String, String> {
+        use octane_core::{EventSink, ModelStepSource, PromptAssembler, TurnRunner};
+        use octane_protocol::{Message, Role, TurnId};
+        use octane_tools::ToolRegistry;
+
+        let tracker = std::sync::Arc::new(octane_tools::FileTracker::new());
+        let mut registry = ToolRegistry::new();
+        octane_tools::register_all(&mut registry, tracker, self.sandbox.clone());
+        // Deliberately no `task` tool: subagents do not delegate further.
+        let registry = std::sync::Arc::new(registry);
+
+        // Filtered to what this agent's definition permits, and filtered by
+        // *omission* — a tool the model can see is one it will try, and the
+        // refusal it then reasons around is context spent on nothing.
+        let permitted = registry.schemas_where(|tool| agent.permits_tool(tool.name()));
+
+        let (policy, _) = build_policy(&self.workspace, &self.policy_permissions);
+
+        let mut core_agent = octane_core::Agent::build();
+        core_agent.name = agent.name.clone();
+        core_agent.allowed_tools =
+            agent.frontmatter.tools.iter().map(|tool| tool.to_string()).collect();
+        core_agent.mode = agent.frontmatter.mode_override.unwrap_or(self.mode);
+
+        let budget = octane_context::Budget::for_model(self.model.info());
+        let mut runner = TurnRunner::new(
+            core_agent.clone(),
+            policy,
+            registry,
+            self.approver.clone(),
+            budget,
+        );
+        runner.mode = core_agent.mode;
+        runner.cancel = cancel;
+
+        // Its own sink, drained here rather than shown: the subagent's tool calls
+        // are surfaced as progress, but its transcript never enters the parent's
+        // context.
+        let (sink, mut events) = EventSink::new(TurnId::new());
+        runner.events = sink;
+
+        let progress = self.progress.clone();
+        let label = agent.name.clone();
+        let pump = tokio::spawn(async move {
+            while let Some(event) = events.recv().await {
+                // Only tool activity is worth surfacing; the subagent's prose is
+                // its report, delivered at the end.
+                if let octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {
+                    item,
+                    ..
+                }) = &event
+                {
+                    if let octane_protocol::ItemKind::ToolExecution { name, input, .. } =
+                        &item.kind
+                    {
+                        let _ = progress.send(octane_protocol::Event::Item(
+                            octane_protocol::ItemEvent::Completed {
+                                turn_id: octane_protocol::TurnId::new(),
+                                item: octane_protocol::Item {
+                                    id: octane_protocol::ItemId::new(),
+                                    kind: octane_protocol::ItemKind::ToolExecution {
+                                        call_id: octane_protocol::ToolCallId::new(),
+                                        name: format!("{label}:{name}"),
+                                        input: input.clone(),
+                                    },
+                                    status: octane_protocol::ItemStatus::Completed,
+                                },
+                            },
+                        ));
+                    }
+                }
+            }
+        });
+
+        let system = if agent.prompt.is_empty() {
+            format!("You are the {} subagent.", agent.name)
+        } else {
+            agent.prompt.clone()
+        };
+        let assembler = PromptAssembler::new(system)
+            .environment(format!("Working directory: {}", self.workspace));
+
+        let history = assembler.assemble(&[], Some(Message::text(Role::User, prompt)));
+        let source = ModelStepSource::new(self.model.clone(), permitted);
+
+        let outcome = runner
+            .run(&source, history, self.workspace.clone(), self.workspace.clone())
+            .await;
+        pump.abort();
+
+        if !outcome.stop_reason.is_success() {
+            return Err(outcome.stop_reason.summary());
+        }
+
+        // The final assistant message is the report. Everything before it was
+        // the process, which is exactly what delegation exists to discard.
+        Ok(outcome
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.role == Role::Assistant)
+            .map(|message| message.text_content())
+            .unwrap_or_default())
+    }
+}
+
+/// Build the policy from configured rules, layered on the baseline.
+fn build_policy(
+    workspace: &Utf8PathBuf,
+    permissions: &octane_config::settings::Permissions,
+) -> (octane_permission::Policy, Vec<octane_permission::PermissionError>) {
+    use octane_permission::{Policy, Scope};
+
+    let mut builder =
+        Policy::builder().workspace_root(workspace.as_str()).with_baseline_denies();
+    for rule in &permissions.deny {
+        builder = builder.deny(rule, Scope::Project);
+    }
+    for rule in &permissions.ask {
+        builder = builder.ask(rule, Scope::Project);
+    }
+    for rule in &permissions.allow {
+        builder = builder.allow(rule, Scope::Project);
+    }
+    builder.build()
 }
