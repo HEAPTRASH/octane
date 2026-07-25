@@ -162,6 +162,12 @@ schema, since an agent that can delegate to itself will.
     /tools       what the model can call this turn, and what is withheld
     /stats       tokens, cache hit rate, and cost
 
+When the context fills, octane prunes old tool output first, then
+summarizes an old span of the conversation and continues. The cached
+prefix and the recent turns are never summarized, and the span never
+splits a tool call from its result. The summary runs on `faster-model`
+when one is configured.
+
 Not every endpoint honours `/thinking off`. Some refuse and reason
 anyway; octane reports the refusal rather than ignoring it.
 
@@ -305,15 +311,12 @@ Written and tested, but not reachable from the binary:
 - MCP. `octane-mcp` speaks the protocol and the permission engine models
   MCP tools, but nothing spawns a server and the crate is not in the
   binary's dependency tree.
-- Compaction. Pruning runs; compaction does not. Past roughly 80% of the
-  window a session fails and the only recourse is `/clear`, which starts
-  over, or restarting.
 - Skills reaching the model. `/name` prints a skill body into the
   transcript, and the tier-1 manifest is not in the system prompt.
 - File-based slash commands. `octane-commands` discovers and expands
   `.octane/commands/*.md`; the binary's command list is hardcoded.
-- `faster-model`. Resolves and is reported by `octane doctor`, but
-  nothing asks for the faster role yet.
+- `faster-model`. Used for compaction; nothing else asks for the faster
+  role yet.
 
 ## Testing
 
