@@ -57,17 +57,20 @@ pub fn estimate_tokens(messages: &[Message]) -> usize {
 /// compaction, so it must not have side effects.
 pub fn reclaimable_tokens(messages: &[Message], protect_tokens: usize) -> usize {
     let cutoff = protection_cutoff(messages, protect_tokens);
+    // The same exemptions `prune` applies. Sharing the set is what stops the
+    // two from drifting: an estimate that promises tokens the prune will not
+    // touch keeps `Budget::pressure` answering `ShouldPrune` long after
+    // pruning has stopped doing anything, and the caller has no way to tell.
+    let protected = protected_call_ids(messages);
 
     messages[..cutoff]
         .iter()
         .flat_map(|message| &message.parts)
         .filter_map(|part| match part {
-            // `CLEARED` is excluded because `prune` skips it below. Counting a
-            // placeholder as reclaimable promises tokens the prune cannot
-            // deliver, which keeps `pressure` answering `ShouldPrune` long
-            // after pruning has stopped doing anything.
             Part::ToolResult(result)
-                if !result.output.is_empty() && result.output != CLEARED =>
+                if !result.output.is_empty()
+                    && result.output != CLEARED
+                    && !protected.contains(&result.call_id) =>
             {
                 Some(result.output.len())
             }
@@ -172,6 +175,25 @@ mod tests {
                 vec![Part::ToolResult(ToolResult {
                     call_id: id,
                     output: "x".repeat(output_len),
+                    metadata: None,
+                    is_error: false,
+                })],
+            ),
+        ]
+    }
+
+    fn tool_exchange_with(name: &str, output: &str) -> Vec<Message> {
+        let id = ToolCallId::new();
+        vec![
+            Message::new(
+                Role::Assistant,
+                vec![Part::ToolCall(ToolCall { id: id.clone(), name: name.into(), input: "{}".into() })],
+            ),
+            Message::new(
+                Role::User,
+                vec![Part::ToolResult(ToolResult {
+                    call_id: id,
+                    output: output.to_string(),
                     metadata: None,
                     is_error: false,
                 })],
@@ -324,5 +346,31 @@ mod tests {
 
         assert!(reclaimable_tokens(&live, 0) > 0, "a real output is reclaimable");
         assert_eq!(reclaimable_tokens(&cleared, 0), 0, "a placeholder is not");
+    }
+
+    #[test]
+    fn the_estimate_never_promises_more_than_the_prune_delivers() {
+        // These two walk the same messages under the same exemptions, and the
+        // caller uses the first to decide whether to call the second. If the
+        // estimate is the larger, `Budget::pressure` keeps answering
+        // ShouldPrune while `prune` clears nothing, and the turn loop spins
+        // without taking a step.
+        let mut history = Vec::new();
+        for (name, output) in [
+            ("read", "a".repeat(80_000)),   // prunable
+            ("skill", "b".repeat(80_000)),  // protected by tool name
+            ("grep", CLEARED.to_string()),  // already pruned
+            ("read", String::new()),        // empty
+            ("todo_read", "c".repeat(40_000)),
+        ] {
+            history.extend(tool_exchange_with(name, &output));
+        }
+        history.push(Message::text(Role::Assistant, "tail"));
+
+        let estimate = reclaimable_tokens(&history, 0);
+        let delivered = prune(history, 0, 0).tokens_reclaimed;
+
+        assert_eq!(estimate, delivered, "the estimate and the prune must agree");
+        assert!(delivered > 0, "the fixture must actually prune something");
     }
 }
