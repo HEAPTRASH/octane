@@ -96,6 +96,23 @@ impl PromptAssembler {
         self
     }
 
+    /// How many messages `assemble` puts in front of the history.
+    ///
+    /// The runner needs this to know which leading messages are the cached
+    /// prefix and must survive compaction. Derived from the same options
+    /// `assemble` reads, so the two cannot disagree.
+    pub fn preamble_len(&self) -> usize {
+        1 + [
+            self.sandbox_description.is_some(),
+            self.skill_manifest.is_some(),
+            self.memory.is_some(),
+            self.environment.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+    }
+
     /// Build the leading messages, in cache order.
     ///
     /// Returns messages only; tool schemas are passed separately in the request

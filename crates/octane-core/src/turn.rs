@@ -27,6 +27,14 @@ use crate::agent::Agent;
 use crate::loop_guard::LoopGuard;
 use crate::step::{DEFAULT_STEP_LIMIT, StepDecision, StopReason};
 
+/// Successful compactions allowed in one turn.
+///
+/// The compaction path does not take a step, so the step limit cannot bound
+/// it. Without a cap, a large preserved prefix can leave pressure high after a
+/// successful compaction and the loop pays for another summarization every
+/// pass.
+const MAX_COMPACTIONS_PER_TURN: u32 = 2;
+
 /// How the runner asks the user for permission.
 ///
 /// A trait so the loop does not know whether it is talking to a TUI, an RPC
@@ -83,6 +91,13 @@ pub struct TurnRunner {
     pub cancel: CancellationToken,
     /// Where the loop publishes as it goes.
     pub events: crate::events::EventSink,
+    /// Turns an old span into a paragraph. Without one the loop cannot compact
+    /// and fails at the threshold, which is the behaviour before compaction
+    /// existed.
+    pub summarizer: Option<Arc<dyn octane_context::compact::Summarizer>>,
+    /// How many leading messages are the cached prompt prefix, and so must
+    /// survive compaction untouched.
+    pub preserved_prefix: usize,
     guard: LoopGuard,
 }
 
@@ -108,6 +123,25 @@ pub struct TurnOutcome {
     /// Messages to append to the thread.
     pub messages: Vec<Message>,
     pub steps_taken: u32,
+    /// The conversation the caller should keep, when the runner reduced it.
+    ///
+    /// Without this, compaction is discarded at turn end: the caller holds its
+    /// own conversation and re-prefixes it every turn, so the runner's copy,
+    /// pruned or compacted, never leaves the loop. The result would be a paid
+    /// summarization on every turn that never shrinks anything. `None` means
+    /// the caller's copy is still correct.
+    pub history_replacement: Option<Vec<Message>>,
+}
+
+impl TurnOutcome {
+    /// Carry a reduced conversation back to the caller.
+    ///
+    /// `None` leaves the caller's copy in place, which is correct whenever the
+    /// runner did not compact.
+    fn with_history(mut self, history: Option<Vec<Message>>) -> Self {
+        self.history_replacement = history;
+        self
+    }
 }
 
 impl TurnRunner {
@@ -129,6 +163,8 @@ impl TurnRunner {
             step_limit: DEFAULT_STEP_LIMIT,
             cancel: CancellationToken::new(),
             events: crate::events::EventSink::discard(),
+            summarizer: None,
+            preserved_prefix: 0,
             guard: LoopGuard::default(),
         }
     }
@@ -147,13 +183,21 @@ impl TurnRunner {
     ) -> TurnOutcome {
         let mut appended: Vec<Message> = Vec::new();
         let mut steps = 0u32;
+        // Compaction bookkeeping. `compactions` bounds the successful ones:
+        // that path does not take a step, so the step limit cannot bound it,
+        // and a shrink of one token would otherwise be enough to keep going
+        // and pay for another summarization.
+        let mut compactions = 0u32;
+        let mut compaction_failures = 0u32;
+        let mut reduced = false;
 
         loop {
             if self.cancel.is_cancelled() {
                 return self.finish(StopReason::Interrupted, appended, steps);
             }
             if steps >= self.step_limit {
-                return self.finish(StopReason::StepLimit { limit: self.step_limit }, appended, steps);
+                return self.finish(StopReason::StepLimit { limit: self.step_limit }, appended, steps)
+                    .with_history(reduced.then(|| history.clone()));
             }
 
             // Context is checked *before* the call, not after a failure. Reacting
@@ -196,13 +240,106 @@ impl TurnRunner {
                     continue;
                 }
                 Pressure::ShouldCompact | Pressure::Exceeded => {
-                    // Compaction is the caller's job: it needs a model call of its
-                    // own, and the runner deliberately owns no provider handle.
-                    return self.finish(
-                        StopReason::Failed { message: "context requires compaction".into() },
-                        appended,
-                        steps,
-                    );
+                    let Some(summarizer) = self.summarizer.clone() else {
+                        return self.finish(
+                            StopReason::Failed {
+                                message: "context requires compaction, and no summarizer is \
+                                          configured"
+                                    .into(),
+                            },
+                            appended,
+                            steps,
+                        );
+                    };
+
+                    if compactions >= MAX_COMPACTIONS_PER_TURN
+                        || compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT
+                    {
+                        return self.finish_with_history(
+                            StopReason::Failed {
+                                message: octane_context::ContextError::CircuitOpen {
+                                    attempts: compaction_failures.max(compactions),
+                                }
+                                .to_string(),
+                            },
+                            appended,
+                            steps,
+                            history,
+                        );
+                    }
+
+                    let plan = match octane_context::compact::plan(
+                        &history,
+                        self.preserved_prefix,
+                        self.budget.effective_window(),
+                    ) {
+                        Ok(plan) => plan,
+                        Err(error) => {
+                            return self.finish_with_history(
+                                StopReason::Failed { message: error.to_string() },
+                                appended,
+                                steps,
+                                history,
+                            );
+                        }
+                    };
+
+                    let summary = match summarizer.summarize(&history[plan.start..plan.end]).await {
+                        Ok(summary) => summary,
+                        Err(error) => {
+                            compaction_failures += 1;
+                            if compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT {
+                                return self.finish_with_history(
+                                    StopReason::Failed { message: error.to_string() },
+                                    appended,
+                                    steps,
+                                    history,
+                                );
+                            }
+                            continue;
+                        }
+                    };
+
+                    // Compaction is a paid model call the session would not
+                    // otherwise see, and both the status line and /stats
+                    // accumulate from reported usage.
+                    self.events.usage(summary.usage);
+
+                    // Built and measured before it is installed. Installing
+                    // first and checking after leaves a summary larger than
+                    // what it replaced sitting in the history, and the retry
+                    // then summarizes the summary.
+                    let candidate = octane_context::compact::apply(&history, &plan, &summary);
+                    let after = octane_context::prune::estimate_tokens(&candidate);
+                    if after >= used {
+                        compaction_failures += 1;
+                        if compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT {
+                            return self.finish_with_history(
+                                StopReason::Failed {
+                                    message: octane_context::ContextError::CircuitOpen {
+                                        attempts: compaction_failures,
+                                    }
+                                    .to_string(),
+                                },
+                                appended,
+                                steps,
+                                history,
+                            );
+                        }
+                        continue;
+                    }
+
+                    self.events.send(octane_protocol::Event::Compaction {
+                        before_tokens: used as u64,
+                        after_tokens: after as u64,
+                        strategy: "summarize".into(),
+                    });
+
+                    history = candidate;
+                    compactions += 1;
+                    compaction_failures = 0;
+                    reduced = true;
+                    continue;
                 }
                 Pressure::Comfortable | Pressure::Warning => {}
             }
@@ -238,13 +375,15 @@ impl TurnRunner {
             }
 
             if step.truncated {
-                return self.finish(StopReason::OutputTruncated, appended, steps);
+                return self.finish(StopReason::OutputTruncated, appended, steps)
+                    .with_history(reduced.then(|| history.clone()));
             }
 
             // The model produced prose instead of tool calls: the turn is done.
             // This is the only success path, and the model chose it.
             if !step.wants_tools || step.tool_calls.is_empty() {
-                return self.finish(StopReason::Completed, appended, steps);
+                return self.finish(StopReason::Completed, appended, steps)
+                    .with_history(reduced.then(|| history.clone()));
             }
 
             let mut result_parts = Vec::new();
@@ -320,7 +459,8 @@ impl TurnRunner {
 
             self.guard.record(&interactions);
             if let Some((signature, repeats)) = self.guard.detect() {
-                return self.finish(StopReason::LoopDetected { signature, repeats }, appended, steps);
+                return self.finish(StopReason::LoopDetected { signature, repeats }, appended, steps)
+                    .with_history(reduced.then(|| history.clone()));
             }
         }
     }
@@ -381,7 +521,22 @@ impl TurnRunner {
     }
 
     fn finish(&self, reason: StopReason, messages: Vec<Message>, steps: u32) -> TurnOutcome {
-        TurnOutcome { stop_reason: reason, messages, steps_taken: steps }
+        TurnOutcome { stop_reason: reason, messages, steps_taken: steps, history_replacement: None }
+    }
+
+    fn finish_with_history(
+        &self,
+        reason: StopReason,
+        messages: Vec<Message>,
+        steps: u32,
+        history: Vec<Message>,
+    ) -> TurnOutcome {
+        TurnOutcome {
+            stop_reason: reason,
+            messages,
+            steps_taken: steps,
+            history_replacement: Some(history),
+        }
     }
 
     /// Decide what to do after a step. Exposed for testing the rails in isolation.
@@ -721,4 +876,155 @@ mod tests {
         assert_eq!(approver.0.load(Ordering::SeqCst), 1, "the grant should have been remembered");
     }
 
+
+    /// A summarizer that returns a fixed paragraph and counts its calls.
+    struct CannedSummarizer {
+        text: String,
+        calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl octane_context::compact::Summarizer for CannedSummarizer {
+        async fn summarize(
+            &self,
+            _span: &[Message],
+        ) -> Result<octane_context::compact::Summary, octane_context::ContextError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(octane_context::compact::Summary {
+                text: self.text.clone(),
+                usage: octane_protocol::Usage {
+                    input_tokens: 100,
+                    output_tokens: 10,
+                    ..Default::default()
+                },
+            })
+        }
+    }
+
+    fn crowded_history(messages: usize, filler: usize) -> Vec<Message> {
+        (0..messages)
+            .map(|i| Message::text(Role::User, format!("{i} {}", "x".repeat(filler))))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_compacted_history_reaches_the_caller() {
+        // The runner holds its own copy while the caller keeps the
+        // conversation and re-prefixes it every turn. Without
+        // `history_replacement` the compaction is discarded at turn end, and
+        // the session pays for a summarization every turn that never shrinks
+        // anything.
+        let summarizer = Arc::new(CannedSummarizer {
+            text: "earlier: they discussed the parser".into(),
+            calls: AtomicUsize::new(0),
+        });
+
+        let history = crowded_history(200, 400);
+        let used = octane_context::prune::estimate_tokens(&history);
+
+        let mut runner = TurnRunner::new(
+            Agent::build(),
+            permissive_policy(),
+            registry(),
+            Arc::new(AlwaysApprove),
+            Budget::new(used + 1_000, used.saturating_sub(1_000), 1),
+        );
+        runner.summarizer = Some(summarizer.clone());
+
+        let source = ScriptedSource::new(vec![final_answer("done")]);
+        let outcome = runner.run(&source, history, "/p".into(), "/p".into()).await;
+
+        assert_eq!(outcome.stop_reason, StopReason::Completed);
+        assert_eq!(summarizer.calls.load(Ordering::SeqCst), 1, "it summarized once");
+
+        let replacement = outcome
+            .history_replacement
+            .expect("a compacted turn must hand its history back");
+        assert!(
+            octane_context::prune::estimate_tokens(&replacement) < used,
+            "the returned history must be smaller than what went in"
+        );
+        // Synthetic, not Text: `text_content` deliberately collects only the
+        // model's own prose, and the summary is a developer message.
+        assert!(
+            replacement.iter().flat_map(|m| &m.parts).any(|part| matches!(
+                part,
+                Part::Synthetic { text } if text.contains("they discussed the parser")
+            )),
+            "the summary must be in it"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_summarizer_the_turn_fails_rather_than_pretending() {
+        let history = crowded_history(200, 400);
+        let used = octane_context::prune::estimate_tokens(&history);
+
+        let mut runner = TurnRunner::new(
+            Agent::build(),
+            permissive_policy(),
+            registry(),
+            Arc::new(AlwaysApprove),
+            Budget::new(used + 1_000, used.saturating_sub(1_000), 1),
+        );
+        runner.summarizer = None;
+
+        let source = ScriptedSource::new(vec![final_answer("unreachable")]);
+        let outcome = runner.run(&source, history, "/p".into(), "/p".into()).await;
+
+        assert!(matches!(outcome.stop_reason, StopReason::Failed { .. }));
+        assert_eq!(source.calls.load(Ordering::SeqCst), 0, "the model was never called");
+    }
+
+    #[tokio::test]
+    async fn compaction_is_bounded_within_one_turn() {
+        // The compaction path does not take a step, so the step limit cannot
+        // bound it. A summarizer that barely shrinks anything would otherwise
+        // be paid for on every pass.
+        struct BarelyShrinks(AtomicUsize);
+
+        #[async_trait]
+        impl octane_context::compact::Summarizer for BarelyShrinks {
+            async fn summarize(
+                &self,
+                span: &[Message],
+            ) -> Result<octane_context::compact::Summary, octane_context::ContextError> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                // One byte under what it replaced, so it always "succeeds".
+                let size = octane_context::prune::estimate_tokens(span) * 4;
+                Ok(octane_context::compact::Summary {
+                    text: "y".repeat(size.saturating_sub(200)),
+                    usage: octane_protocol::Usage::default(),
+                })
+            }
+        }
+
+        let summarizer = Arc::new(BarelyShrinks(AtomicUsize::new(0)));
+        let history = crowded_history(400, 400);
+        let used = octane_context::prune::estimate_tokens(&history);
+
+        let mut runner = TurnRunner::new(
+            Agent::build(),
+            permissive_policy(),
+            registry(),
+            Arc::new(AlwaysApprove),
+            Budget::new(used + 10, used.saturating_sub(10), 1),
+        );
+        runner.summarizer = Some(summarizer.clone());
+
+        let source = ScriptedSource::new(vec![final_answer("done")]);
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            runner.run(&source, history, "/p".into(), "/p".into()),
+        )
+        .await
+        .expect("the turn must terminate");
+
+        assert!(
+            summarizer.0.load(Ordering::SeqCst) <= 3,
+            "at most a small, fixed number of paid summarizations, got {}",
+            summarizer.0.load(Ordering::SeqCst)
+        );
+        let _ = outcome;
+    }
 }

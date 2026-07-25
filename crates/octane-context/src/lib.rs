@@ -26,6 +26,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod budget;
+pub mod compact;
 pub mod prune;
 
 pub use budget::{Budget, Pressure};
@@ -56,4 +57,10 @@ pub enum ContextError {
 
     #[error("history cannot be reduced further without orphaning a tool call")]
     Irreducible,
+
+    /// The summarizer itself failed. Distinct from `CircuitOpen`, which is
+    /// about repeated failure, and from `Irreducible`, which is about there
+    /// being nothing left to summarize.
+    #[error("could not summarize the conversation: {0}")]
+    Summarization(String),
 }

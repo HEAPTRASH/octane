@@ -28,6 +28,7 @@ pub mod model_source;
 pub mod loop_guard;
 pub mod prompt;
 pub mod step;
+pub mod summarizer;
 pub mod task;
 pub mod turn;
 
@@ -37,6 +38,7 @@ pub use model_source::ModelStepSource;
 pub use loop_guard::LoopGuard;
 pub use prompt::{BASE_INSTRUCTIONS, PromptAssembler, mode_switch_notice};
 pub use step::{StepDecision, StopReason};
+pub use summarizer::ModelSummarizer;
 pub use task::{Delegate, TaskTool};
 pub use turn::{Approver, TurnRunner};
 

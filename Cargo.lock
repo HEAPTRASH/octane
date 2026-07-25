@@ -1145,6 +1145,7 @@ dependencies = [
 name = "octane-context"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "octane-protocol",
  "octane-provider",
  "serde",

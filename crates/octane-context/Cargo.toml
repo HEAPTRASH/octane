@@ -8,6 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-trait.workspace = true
 octane-protocol.workspace = true
 octane-provider.workspace = true
 serde.workspace = true

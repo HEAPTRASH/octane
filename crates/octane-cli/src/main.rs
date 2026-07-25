@@ -377,6 +377,26 @@ async fn interactive(
         },
         Err(_) => None,
     };
+    // Compaction needs its own model call. `faster-model` names it when set;
+    // otherwise the provider's `faster` default, resolved against the primary's
+    // provider rather than the first usable one, which need not be the same.
+    // Falling back to the primary is better than not compacting at all.
+    let summarizer: Option<std::sync::Arc<octane_core::ModelSummarizer>> = {
+        let resolved = settings
+            .faster_model
+            .as_deref()
+            .and_then(|reference| registry.resolve(reference).ok())
+            .or_else(|| {
+                let provider = selected.as_ref().ok().map(|primary| primary.provider.clone());
+                registry.resolve_role(provider.as_deref(), octane_provider::Role::Faster).ok()
+            })
+            .or_else(|| selected.as_ref().ok().cloned());
+
+        resolved
+            .and_then(|resolved| octane_provider::connect(resolved).ok())
+            .map(|model| std::sync::Arc::new(octane_core::ModelSummarizer::new(model)))
+    };
+
     // Assembled once. Skills are deliberately absent: `render_manifest` tells
     // the model to "load one with the `skill` tool", and no such tool is
     // registered — advertising it would buy failed calls.
@@ -550,6 +570,7 @@ async fn interactive(
                     thinking,
                     permissions: &settings.permissions,
                     prompt: &assembler,
+                    summarizer: &summarizer,
                 };
                 run_turn(&mut app, &session_ctx, &mut history, &mut session_usage).await?;
             }
@@ -676,6 +697,7 @@ async fn interactive(
                     thinking,
                     permissions: &settings.permissions,
                     prompt: &assembler,
+                    summarizer: &summarizer,
                 };
                 run_turn(&mut app, &session, &mut history, &mut session_usage).await?;
             }
@@ -1597,6 +1619,10 @@ struct Session<'a> {
     mode: PermissionMode,
     thinking: octane_provider::Thinking,
     permissions: &'a octane_config::settings::Permissions,
+    /// Summarizes an old span when the context fills. Absent when no faster
+    /// model resolved, in which case the turn fails at the threshold rather
+    /// than pretending to compact.
+    summarizer: &'a Option<std::sync::Arc<octane_core::ModelSummarizer>>,
     /// Built once for the session, not per turn. Rebuilding it would re-walk
     /// the filesystem and could change the prefix mid-session, which is the one
     /// thing the cache ordering in `PromptAssembler` exists to prevent.
@@ -1609,7 +1635,8 @@ async fn run_turn(
     history: &mut Vec<octane_protocol::Message>,
     session_usage: &mut SessionUsage,
 ) -> Result<()> {
-    let Session { model, workspace, sandbox, mode, thinking, permissions, prompt } = *session;
+    let Session { model, workspace, sandbox, mode, thinking, permissions, prompt, summarizer } =
+        *session;
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
     use octane_protocol::TurnId;
     use octane_tools::ToolRegistry;
@@ -1651,6 +1678,12 @@ async fn run_turn(
     let mut runner = TurnRunner::new(agent, policy, registry.clone(), approver, budget);
     runner.mode = mode;
     runner.events = sink;
+    // The runner is handed the assembled prompt, so the preamble is at the
+    // front of what it sees and must survive compaction.
+    runner.preserved_prefix = prompt.preamble_len();
+    runner.summarizer = summarizer
+        .as_ref()
+        .map(|s| s.clone() as std::sync::Arc<dyn octane_context::compact::Summarizer>);
 
     let cancel = runner.cancel.clone();
     // Plan mode denies every mutating action, so showing the model `write` and
@@ -1729,6 +1762,14 @@ async fn run_turn(
     }
 
     app.status_mut().activity = None;
+
+    // A compacted turn hands back the reduced conversation. It arrives with
+    // the assembled preamble still on the front, which the caller re-adds
+    // every turn, so it is stripped here rather than duplicated forever.
+    if let Some(replacement) = outcome.history_replacement {
+        let preamble = prompt.preamble_len().min(replacement.len());
+        *history = replacement[preamble..].to_vec();
+    }
     history.extend(outcome.messages);
 
     if !outcome.stop_reason.is_success() {
