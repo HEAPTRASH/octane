@@ -169,6 +169,25 @@ impl TurnRunner {
                         octane_context::PRUNE_PROTECT_TOKENS,
                         octane_context::PRUNE_MINIMUM_TOKENS,
                     );
+
+                    // A prune that reclaims nothing must not loop. This arm
+                    // does not take a step, so `steps` never advances and the
+                    // step limit above cannot end it; with the history
+                    // unchanged the next pass computes the same pressure and
+                    // arrives back here. That is an unbounded spin, not a slow
+                    // turn. It is still reachable with an honest
+                    // `reclaimable_tokens`, because `prune` also skips
+                    // protected calls: everything reclaimable can be protected.
+                    if outcome.tokens_reclaimed == 0 {
+                        return self.finish(
+                            StopReason::Failed {
+                                message: "context is full and cannot be pruned further".into(),
+                            },
+                            appended,
+                            steps,
+                        );
+                    }
+
                     history = outcome.messages;
                     continue;
                 }
@@ -696,5 +715,88 @@ mod tests {
 
         assert_eq!(outcome.stop_reason, StopReason::Completed);
         assert_eq!(approver.0.load(Ordering::SeqCst), 1, "the grant should have been remembered");
+    }
+
+    #[tokio::test]
+    async fn a_prune_that_reclaims_nothing_ends_the_turn_rather_than_spinning() {
+        // The prune arm does not take a step, so `steps` never advances and the
+        // step limit cannot end it. If the prune reclaims nothing, the history
+        // is unchanged, the next pass computes the same pressure, and the loop
+        // arrives back at the same arm forever: an unbounded spin that looks
+        // like the agent is thinking.
+        //
+        // Reachable because `prune` skips protected calls. `skill` output is
+        // protected, so a history of skill results is reclaimable by the
+        // estimate and untouchable by the prune.
+        use octane_protocol::{Role, ToolCall, ToolResult};
+
+        let mut history = Vec::new();
+        for _ in 0..400 {
+            let id = ToolCallId::new();
+            history.push(Message::new(
+                Role::Assistant,
+                vec![Part::ToolCall(ToolCall {
+                    id: id.clone(),
+                    name: "skill".into(),
+                    input: "{}".into(),
+                })],
+            ));
+            history.push(Message::new(
+                Role::User,
+                vec![Part::ToolResult(ToolResult {
+                    call_id: id,
+                    output: "x".repeat(4_000),
+                    metadata: None,
+                    is_error: false,
+                })],
+            ));
+        }
+
+        // Assert the preconditions, or this test could pass without ever
+        // reaching the branch it exists to protect.
+        let used = octane_context::prune::estimate_tokens(&history);
+        let reclaimable = octane_context::prune::reclaimable_tokens(
+            &history,
+            octane_context::PRUNE_PROTECT_TOKENS,
+        );
+        let budget = Budget::new(1_000_000, used.saturating_sub(1), 1);
+        assert!(
+            matches!(budget.pressure(used, reclaimable), octane_context::Pressure::ShouldPrune),
+            "setup must land on the prune branch, got {:?}",
+            budget.pressure(used, reclaimable)
+        );
+        assert_eq!(
+            octane_context::prune(
+                history.clone(),
+                octane_context::PRUNE_PROTECT_TOKENS,
+                octane_context::PRUNE_MINIMUM_TOKENS,
+            )
+            .tokens_reclaimed,
+            0,
+            "setup must reclaim nothing"
+        );
+
+        let mut runner = TurnRunner::new(
+            Agent::build(),
+            permissive_policy(),
+            registry(),
+            Arc::new(AlwaysApprove),
+            budget,
+        );
+        let source = ScriptedSource::new(vec![final_answer("unreachable")]);
+
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(5), runner.run(
+                &source,
+                history,
+                "/p".into(),
+                "/p".into(),
+            ))
+            .await
+            .expect("the turn must terminate rather than spin");
+
+        assert!(matches!(outcome.stop_reason, StopReason::Failed { .. }));
+        // It gave up instead of asking the model to carry on regardless.
+        assert_eq!(source.calls.load(Ordering::SeqCst), 0);
     }
 }

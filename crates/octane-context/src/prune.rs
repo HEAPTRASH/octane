@@ -62,7 +62,15 @@ pub fn reclaimable_tokens(messages: &[Message], protect_tokens: usize) -> usize 
         .iter()
         .flat_map(|message| &message.parts)
         .filter_map(|part| match part {
-            Part::ToolResult(result) if !result.output.is_empty() => Some(result.output.len()),
+            // `CLEARED` is excluded because `prune` skips it below. Counting a
+            // placeholder as reclaimable promises tokens the prune cannot
+            // deliver, which keeps `pressure` answering `ShouldPrune` long
+            // after pruning has stopped doing anything.
+            Part::ToolResult(result)
+                if !result.output.is_empty() && result.output != CLEARED =>
+            {
+                Some(result.output.len())
+            }
             _ => None,
         })
         .sum::<usize>()
@@ -286,5 +294,35 @@ mod tests {
         // Nothing left to reclaim, so the second pass is a no-op.
         assert_eq!(second.tokens_reclaimed, 0);
         assert_eq!(second.messages, first.messages);
+    }
+
+    #[test]
+    fn a_cleared_placeholder_is_not_counted_as_reclaimable() {
+        // `prune` skips placeholders, so counting them here promises tokens it
+        // cannot deliver. `Budget::pressure` then keeps answering ShouldPrune
+        // after pruning has stopped doing anything, and the caller's prune
+        // branch loops without progress.
+        fn result_then_tail(output: &str) -> Vec<Message> {
+            vec![
+                Message::new(
+                    Role::User,
+                    vec![Part::ToolResult(ToolResult {
+                        call_id: ToolCallId::new(),
+                        output: output.to_string(),
+                        metadata: None,
+                        is_error: false,
+                    })],
+                ),
+                // A trailing message, or the protection cutoff leaves nothing
+                // ahead of it to measure.
+                Message::text(Role::Assistant, "done"),
+            ]
+        }
+
+        let live = result_then_tail(&"x".repeat(200_000));
+        let cleared = result_then_tail(CLEARED);
+
+        assert!(reclaimable_tokens(&live, 0) > 0, "a real output is reclaimable");
+        assert_eq!(reclaimable_tokens(&cleared, 0), 0, "a placeholder is not");
     }
 }
