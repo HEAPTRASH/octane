@@ -67,6 +67,8 @@ So: finished content goes into real scrollback via `Terminal::insert_before`, an
 
 Everything in `octane-tui` except `app` is pure — state in, lines out — because rendering and keybinding logic is where the bugs are and it should be testable by calling a function.
 
+Two things must hold or the region visibly flickers, and neither is catchable by a unit test because both render *correctly*: the region is only redrawn when something changed, and `Terminal::resize` is only called when the size genuinely changed (it resets ratatui's buffers, discarding the cell diff). `scripts/tui-smoke.py` measures it on the wire — idle output must be ~0 bytes, not 9.6 KB/s.
+
 ## The two layers that are easy to conflate
 
 **Policy** (`octane-permission`) asks *should this be allowed?* and runs before a command does.
@@ -94,8 +96,9 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 341 tests
+cargo test --workspace       # 343 tests
 cargo clippy --workspace --all-targets
+python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```
 
 Tests are behavioural and named for the property they protect, e.g. `a_path_with_shell_metacharacters_cannot_reach_the_profile`, `a_session_grant_cannot_survive_a_switch_to_plan`, `changing_output_is_progress_not_a_loop`.

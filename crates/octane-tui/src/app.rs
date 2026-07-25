@@ -84,6 +84,16 @@ pub struct App {
     spinner_frame: usize,
     started: Instant,
     raw_mode: bool,
+    /// Set when something the live region shows has changed.
+    ///
+    /// Without this the caller's poll tick repaints the region ~12 times a second
+    /// forever, which is visible as flicker on any terminal that is not doing
+    /// synchronized updates perfectly.
+    dirty: bool,
+    /// Last viewport size actually applied, so `resize` is only called when it
+    /// genuinely changed — see [`App::draw`].
+    viewport_height: u16,
+    viewport_width: u16,
 }
 
 impl std::fmt::Debug for App {
@@ -118,15 +128,28 @@ impl App {
             spinner_frame: 0,
             started: Instant::now(),
             raw_mode: true,
+            // The first frame must always draw.
+            dirty: true,
+            viewport_height: BASE_VIEWPORT_HEIGHT,
+            viewport_width: 0,
         })
     }
 
+    /// Mutable access to the status line. Marks the region for redraw, since the
+    /// caller is about to change something it displays.
     pub fn status_mut(&mut self) -> &mut StatusLine {
+        self.dirty = true;
         &mut self.status
     }
 
     pub fn options_mut(&mut self) -> &mut RenderOptions {
+        self.dirty = true;
         &mut self.options
+    }
+
+    /// Force a redraw on the next [`App::draw`].
+    pub fn invalidate(&mut self) {
+        self.dirty = true;
     }
 
     /// Append an agent event to scrollback.
@@ -148,6 +171,8 @@ impl App {
             let paragraph = Paragraph::new(lines);
             ratatui::widgets::Widget::render(paragraph, buf.area, buf);
         })?;
+        // Scrolling the region up leaves it needing a repaint.
+        self.dirty = true;
         Ok(())
     }
 
@@ -158,14 +183,31 @@ impl App {
         responder: tokio::sync::oneshot::Sender<ApprovalReply>,
     ) {
         self.pending_approval = Some((prompt, responder));
+        self.dirty = true;
     }
 
     pub fn has_pending_approval(&self) -> bool {
         self.pending_approval.is_some()
     }
 
-    /// Redraw the live region.
+    /// Redraw the live region, if anything changed.
+    ///
+    /// Both guards below exist because their absence is visible as flicker:
+    ///
+    /// **Nothing changed, nothing drawn.** The caller polls on a tick, so without
+    /// a dirty flag this repaints ~12 times a second forever, including while the
+    /// user is reading a still screen.
+    ///
+    /// **Resize only on an actual size change.** `Terminal::resize` resets both
+    /// of ratatui's buffers, which discards the cell diff and forces a full
+    /// repaint of the region. Calling it unconditionally turned every frame into
+    /// a full repaint and defeated the diffing entirely.
     pub fn draw(&mut self) -> Result<()> {
+        if !self.dirty {
+            return Ok(());
+        }
+        self.dirty = false;
+
         let composer_rows = composer_height(&self.composer);
         let approval_rows = self
             .pending_approval
@@ -176,7 +218,13 @@ impl App {
 
         let needed = BASE_VIEWPORT_HEIGHT + composer_rows.saturating_sub(1) + approval_rows
             + activity_rows;
-        self.terminal.resize(inline_area(&self.terminal, needed)?)?;
+        let area = inline_area(&self.terminal, needed)?;
+
+        if viewport_changed((self.viewport_width, self.viewport_height), area) {
+            self.viewport_height = area.height;
+            self.viewport_width = area.width;
+            self.terminal.resize(area)?;
+        }
 
         // Synchronized output: the terminal buffers this frame and presents it in
         // one go, which is what keeps the composer from tearing while streaming.
@@ -244,22 +292,38 @@ impl App {
     /// Poll for input. `Ok(None)` means the tick elapsed with nothing to report.
     pub fn poll(&mut self) -> Result<Option<AppEvent>> {
         if !crossterm::event::poll(TICK)? {
-            self.spinner_frame = self.spinner_frame.wrapping_add(1);
+            // An idle tick changes nothing on screen, so it must not schedule a
+            // repaint. Only an animating spinner does.
             if let Some(activity) = self.status.activity.as_mut() {
                 activity.elapsed_secs = self.started.elapsed().as_secs();
+                self.spinner_frame = self.spinner_frame.wrapping_add(1);
+                self.dirty = true;
             }
             return Ok(None);
         }
 
         match crossterm::event::read()? {
-            TermEvent::Key(key) if key.kind == KeyEventKind::Press => Ok(self.on_key(key)),
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                // A keypress may or may not change the composer, but working that
+                // out per action is not worth the bookkeeping — one repaint per
+                // keystroke is exactly the right rate.
+                self.dirty = true;
+                Ok(self.on_key(key))
+            }
             // Bracketed paste arrives whole, so newlines inside it insert rather
             // than submit.
             TermEvent::Paste(text) => {
                 self.composer.insert_str(&text);
+                self.dirty = true;
                 Ok(None)
             }
-            TermEvent::Resize(_, _) => Ok(None),
+            TermEvent::Resize(_, _) => {
+                // Soft wrapping moved, so nothing on screen can be trusted.
+                // Zeroing the recorded width forces the resize path in `draw`.
+                self.viewport_width = 0;
+                self.dirty = true;
+                Ok(None)
+            }
             _ => Ok(None),
         }
     }
@@ -358,6 +422,7 @@ impl App {
         }
         if let Some((_, responder)) = self.pending_approval.take() {
             let _ = responder.send(reply);
+            self.dirty = true;
         }
     }
 
@@ -423,6 +488,17 @@ fn inline_area(
     Ok(ratatui::layout::Rect::new(0, 0, size.width, clamp_height(requested, size.height)))
 }
 
+/// Whether the live region actually needs a ratatui `resize`.
+///
+/// Split out and tested because calling `resize` unconditionally is not a
+/// visible mistake — it renders correctly. It just resets both of ratatui's
+/// buffers, discarding the cell diff, so every frame becomes a full repaint.
+/// Measured at 9.6 KB/s of terminal traffic while completely idle, which is
+/// what the flicker was.
+fn viewport_changed(current: (u16, u16), area: ratatui::layout::Rect) -> bool {
+    current != (area.width, area.height)
+}
+
 /// Never take more than half the screen: the transcript is the point, and a live
 /// region that fills the window leaves nothing to read.
 fn clamp_height(requested: u16, terminal_height: u16) -> u16 {
@@ -462,6 +538,24 @@ mod tests {
             MAX_COMPOSER_ROWS,
             "a long draft must not swallow the screen"
         );
+    }
+
+    #[test]
+    fn an_unchanged_viewport_is_not_resized() {
+        let area = ratatui::layout::Rect::new(0, 0, 100, 6);
+        // The common case, every frame. Resizing here throws away the cell diff
+        // and turns each frame into a full repaint.
+        assert!(!viewport_changed((100, 6), area));
+    }
+
+    #[test]
+    fn a_changed_viewport_is_resized() {
+        let area = ratatui::layout::Rect::new(0, 0, 100, 6);
+        assert!(viewport_changed((100, 5), area), "the composer grew");
+        assert!(viewport_changed((90, 6), area), "the window was resized");
+        // Zero width is the sentinel `poll` sets on a terminal resize to force
+        // the resize path, since soft wrapping has moved.
+        assert!(viewport_changed((0, 6), area));
     }
 
     #[test]
