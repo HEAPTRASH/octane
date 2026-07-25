@@ -15,8 +15,8 @@
   <!-- Brutalist Ticker Marquee Header -->
   <div class="marquee-ticker">
     <div class="marquee-track">
-      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 585+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
-      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 585+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
+      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 683+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
+      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 683+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
     </div>
   </div>
 
@@ -112,14 +112,14 @@
           <div class="term-line"><span class="dim">System:</span> Resolved configuration [sandbox=seatbelt, mode=hybrid, status=ready]</div>
           <div class="term-line"><span class="prompt-sym">❯</span> <span class="cyan">octane doctor</span></div>
           <div class="term-line"><span class="green">[OK]</span> Containment: macOS Seatbelt rules initialized</div>
-          <div class="term-line"><span class="green">[OK]</span> Tools registered: read, write, edit, bash, glob, grep, list</div>
+          <div class="term-line"><span class="green">[OK]</span> Tools registered: read, write, edit, bash, glob, grep, list, task</div>
           <div class="term-line"><span class="green">[OK]</span> Model connected: openrouter/claude-3.7-sonnet</div>
           <br>
           <div class="term-line"><span class="prompt-sym">❯</span> <span class="white">Analyze workspace layout and test suite status...</span></div>
           <div class="term-line"><span class="purple">⚡ [tool:grep]</span> pattern="TODO" mode="count" glob="**/*.rs"</div>
           <div class="term-line output-line">├─ crates/octane-core: 0 matches</div>
           <div class="term-line output-line">├─ crates/octane-sandbox: 0 matches</div>
-          <div class="term-line output-line">└─ 585 tests passed in 1.42s (0 warnings)</div>
+          <div class="term-line output-line">└─ 683 tests passed in 1.42s (0 warnings)</div>
           <div class="term-line"><span class="acid-text">Agent:</span> All 13 workspace crates are clean. Kernel sandbox is strictly enforcing read-only boundaries on <span class="yellow">.git/</span> and <span class="yellow">.octane/</span>.</div>
         </div>
       </div>
@@ -138,7 +138,7 @@
         </div>
         <div class="stat-box">
           <div class="stat-header">TEST SUITE</div>
-          <div class="stat-num white-text">585+</div>
+          <div class="stat-num white-text">683</div>
           <div class="stat-title">BEHAVIORAL TESTS</div>
           <div class="stat-desc">100% Rust 2024 Safety</div>
         </div>
@@ -213,9 +213,9 @@
         <!-- Feature 4 -->
         <div class="feature-box">
           <div class="box-tag">04 /// MCP &amp; TOOLS</div>
-          <h3>7 BUILT-IN SAFE TOOLS + MCP</h3>
+          <h3>8 BUILT-IN SAFE TOOLS + MCP</h3>
           <p>
-            Ships with <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, <code>glob</code>, <code>grep</code>, and <code>list</code>. Fully protocol-compliant with Model Context Protocol (MCP) over JSON-RPC.
+            Ships with <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, <code>glob</code>, <code>grep</code>, <code>list</code>, and subagent delegation via <code>task</code>. Fully protocol-compliant with Model Context Protocol (MCP) over JSON-RPC.
           </p>
           <ul class="brutalist-list">
             <li>Glob search sorted by mtime for instant relevance</li>
@@ -248,7 +248,7 @@
           <ul class="brutalist-list">
             <li>Nix Flake integrated toolchain</li>
             <li>Forbid unsafe code across workspace</li>
-            <li>585+ unit, integration, and security tests</li>
+            <li>683 unit, integration, and security tests</li>
           </ul>
         </div>
       </div>
@@ -582,7 +582,7 @@ cd octane-agent</code>
         <div class="step-card">
           <div class="step-num">02</div>
           <h3>TEST SUITE</h3>
-          <p>Verify all 585+ unit, integration, and security assertion tests pass.</p>
+          <p>Verify all 683 unit, integration, and security assertion tests pass.</p>
           <div class="code-box">
             <code>cargo test --workspace</code>
             <button class="copy-btn" data-copy="cargo test --workspace">[COPY]</button>

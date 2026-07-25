@@ -56,7 +56,7 @@ document.addEventListener('DOMContentLoaded', () => {
     },
     tools: {
       title: 'octane-tools',
-      desc: 'Contains built-in safe execution tools (read, write, edit, bash, glob, grep, list) with deterministic mtime sorting and BTreeMap schema serialization.',
+      desc: 'Contains built-in safe execution tools (read, write, edit, bash, glob, grep, list, task) with deterministic mtime sorting and BTreeMap schema serialization.',
       owns: 'Tool trait, ToolRegistry, the built-in tools',
       doesNotOwn: 'Whether a tool call is permitted'
     },
@@ -146,16 +146,17 @@ document.addEventListener('DOMContentLoaded', () => {
         appendTermLine('<span class="green">[OK]</span> OpenRouter gateway connected (gemini-3.6-flash / claude-3.7-sonnet)');
         appendTermLine('<span class="acid-text">Status: ALL SYSTEMS OK (0 errors, 0 security warnings)</span>');
       } else if (lower === 'crates') {
-        appendTermLine('<span class="purple">Workspace Crates (13):</span>');
+        appendTermLine('<span class="purple">Workspace Crates (14):</span>');
         appendTermLine('  ├─ octane-protocol     (Thread / Turn / Item vocabulary)');
         appendTermLine('  ├─ octane-provider     (LanguageModel trait, pricing, stream normalization)');
-        appendTermLine('  ├─ octane-tools        (7 built-in tools + MCP adapter)');
+        appendTermLine('  ├─ octane-tools        (8 built-in tools + MCP adapter)');
         appendTermLine('  ├─ octane-permission   (Allow / Ask / Deny policy engine)');
         appendTermLine('  ├─ octane-sandbox      (Seatbelt / Landlock / AppContainer containment)');
         appendTermLine('  ├─ octane-context      (Token budget, pruning, compaction)');
         appendTermLine('  ├─ octane-memory       (OCTANE.md layering & @imports)');
         appendTermLine('  ├─ octane-skills       (Skill discovery)');
         appendTermLine('  ├─ octane-commands     (Slash commands & templates)');
+        appendTermLine('  ├─ octane-config       (.octane/ settings & agent definitions)');
         appendTermLine('  ├─ octane-mcp          (MCP JSON-RPC transport)');
         appendTermLine('  ├─ octane-core         (ReAct loop & agent coordinator)');
         appendTermLine('  ├─ octane-tui          (Ratatui streaming client)');

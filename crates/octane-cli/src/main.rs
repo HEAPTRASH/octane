@@ -405,6 +405,7 @@ async fn interactive(
     let model_names: Vec<String> =
         registry.models().iter().map(|model| model.reference.clone()).collect();
     let mut history: Vec<octane_protocol::Message> = Vec::new();
+    let mut session_usage = SessionUsage::default();
     // Runtime override for the model's configured default.
     let mut thinking = settings.thinking.unwrap_or_else(|| {
         selected.as_ref().map(|resolved| resolved.thinking).unwrap_or_default()
@@ -550,7 +551,7 @@ async fn interactive(
                     permissions: &settings.permissions,
                     prompt: &assembler,
                 };
-                run_turn(&mut app, &session_ctx, &mut history).await?;
+                run_turn(&mut app, &session_ctx, &mut history, &mut session_usage).await?;
             }
 
             AppEvent::Submit(Submission::Command { name, args }) => {
@@ -566,6 +567,30 @@ async fn interactive(
                         continue;
                     }
                     "agents" => render_agents(workspace),
+                    "tools" => {
+                        // Built fresh, because the turn's registry is
+                        // constructed inside run_turn and is gone by now. It
+                        // must include `task` or this lies by omission, so a
+                        // stub delegate stands in: TaskTool stores it without
+                        // calling it, and nothing here runs a turn.
+                        let mut registry = octane_tools::ToolRegistry::new();
+                        octane_tools::register_all(
+                            &mut registry,
+                            std::sync::Arc::new(octane_tools::FileTracker::new()),
+                            sandbox.clone(),
+                        );
+                        let (agents, _) =
+                            octane_config::discover_agents(&octane_config::roots(workspace));
+                        registry.register(std::sync::Arc::new(octane_core::TaskTool::new(
+                            agents,
+                            std::sync::Arc::new(UnusedDelegate),
+                        )));
+                        render_tools(&registry, mode)
+                    }
+                    "stats" => match session.as_ref() {
+                        Some(model) => render_stats(&session_usage, model.as_ref(), &history, &assembler),
+                        None => "No model is configured. Run `/connect` to set one up.".into(),
+                    },
                     other if skill_body(workspace, other).is_some() => {
                         // Tier 2: the body is read only now, on activation.
                         skill_body(workspace, other).unwrap_or_default()
@@ -652,7 +677,7 @@ async fn interactive(
                     permissions: &settings.permissions,
                     prompt: &assembler,
                 };
-                run_turn(&mut app, &session, &mut history).await?;
+                run_turn(&mut app, &session, &mut history, &mut session_usage).await?;
             }
         }
     }
@@ -669,6 +694,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/thinking", "show or set reasoning: off, low, medium, high"),
     ("/cs", "search the codebase with parallel research agents"),
     ("/agents", "list available agents"),
+    ("/tools", "list the tools the model can call this turn"),
+    ("/stats", "token usage, cache hit rate, and cost"),
     ("/settings", "show resolved settings"),
     ("/clear", "start over: clear the conversation and the screen"),
     ("/exit", "quit octane"),
@@ -1411,6 +1438,157 @@ fn set_thinking(
 /// and the terminal, so the UI keeps repainting and Esc keeps working while the
 /// model is talking. Awaiting the turn directly would freeze the interface for
 /// its whole duration.
+/// Stands in for the real delegate when a `TaskTool` is built only to be
+/// described. `TaskTool::new` stores the delegate without calling it, and
+/// `/tools` never runs a turn, so this is unreachable rather than merely
+/// unused.
+struct UnusedDelegate;
+
+#[async_trait::async_trait]
+impl octane_core::Delegate for UnusedDelegate {
+    async fn run(
+        &self,
+        _agent: &octane_config::AgentDefinition,
+        _prompt: &str,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<String, String> {
+        Err("this TaskTool exists only to be listed".into())
+    }
+}
+
+/// `/tools` - what the model can actually call this turn.
+///
+/// Tool availability is not fixed: plan mode omits mutating tools from the
+/// schema set, and a subagent gets a further filter by name. Neither was
+/// observable, so "why did it not just edit the file?" had no answer short of
+/// reading the source.
+///
+/// Rows are indented two spaces and never begin with a markdown marker, since
+/// the transcript renders what it is given.
+fn render_tools(registry: &octane_tools::ToolRegistry, mode: PermissionMode) -> String {
+    let mut out = String::from("Tools offered this turn\n\n");
+
+    let names: Vec<&str> = registry.names().collect();
+    let width = names.iter().map(|name| name.len()).max().unwrap_or(0).max(4) + 2;
+
+    let mut hidden = Vec::new();
+    for name in &names {
+        let Some(tool) = registry.get(name) else { continue };
+        if mode == PermissionMode::Plan && tool.as_ref().is_mutating() {
+            hidden.push(*name);
+            continue;
+        }
+        out.push_str(&format!("  {:<width$}offered\n", name));
+    }
+
+    if !hidden.is_empty() {
+        out.push_str(&format!(
+            "\nHidden by {} mode, because a denial ends the turn\n\n",
+            mode.label()
+        ));
+        for name in hidden {
+            out.push_str(&format!("  {:<width$}mutating\n", name));
+        }
+    }
+
+    out
+}
+
+/// `/stats` - what the session has cost.
+fn render_stats(
+    usage: &SessionUsage,
+    model: &dyn octane_provider::LanguageModel,
+    history: &[octane_protocol::Message],
+    prompt: &octane_core::PromptAssembler,
+) -> String {
+    let info = model.info();
+    let budget = octane_context::Budget::for_model(info);
+    // The assembled prompt, not the bare conversation. The turn loop measures
+    // what it is about to send, which includes the system instructions, the
+    // sandbox description and project memory. Reporting the conversation alone
+    // understates the window by several thousand tokens on an empty session.
+    let used = octane_context::prune::estimate_tokens(&prompt.assemble(history, None));
+
+    let mut out = String::from("Session\n\n");
+    out.push_str(&format!("  model            {}\n", info.display_name));
+    out.push_str(&format!("  model calls      {}\n", usage.calls));
+    out.push_str("\nTokens\n\n");
+    out.push_str(&format!("  input            {}\n", thousands(usage.input)));
+    out.push_str(&format!("  of which cached  {}\n", thousands(usage.cached_input)));
+    out.push_str(&format!("  output           {}\n", thousands(usage.output)));
+    out.push_str(&format!("  reasoning        {}\n", thousands(usage.reasoning)));
+
+    out.push_str("\nContext\n\n");
+    out.push_str(&format!(
+        "  in use           {} of {} ({:.0}%)\n",
+        thousands(used as u64),
+        thousands(budget.effective_window() as u64),
+        budget.utilization(used) * 100.0,
+    ));
+
+    out.push_str("\nCache\n\n");
+    out.push_str(&format!("  hit rate         {:.0}%\n", usage.cache_hit_rate() * 100.0));
+    out.push_str(&format!("  cost             ${:.4}\n", usage.cost));
+
+    // Said plainly rather than left for someone to discover by comparing this
+    // with their provider bill.
+    out.push_str("\n  Delegated work is not counted: a subagent reports usage on\n");
+    out.push_str("  its own event stream, which this session never sees.\n");
+    out
+}
+
+/// Group digits. octane-tui has one of these and does not export it.
+fn thousands(count: u64) -> String {
+    let digits = count.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// Running totals for `/stats`.
+///
+/// Subagent spend is deliberately absent: each subagent is given its own
+/// `EventSink` (see `SubagentRunner::delegate`), so its usage never reaches
+/// this loop. Reporting a total that silently omits delegated work would be
+/// worse than reporting the primary turn's and saying so.
+#[derive(Debug, Default, Clone, Copy)]
+struct SessionUsage {
+    input: u64,
+    output: u64,
+    cached_input: u64,
+    reasoning: u64,
+    cost: f64,
+    /// Model calls, not user turns: usage is reported per step, and a turn
+    /// that uses tools takes several.
+    calls: u32,
+}
+
+impl SessionUsage {
+    fn add(&mut self, reported: &octane_protocol::Usage) {
+        self.input += reported.input_tokens;
+        self.output += reported.output_tokens;
+        self.cached_input += reported.cached_input_tokens;
+        self.reasoning += reported.reasoning_tokens;
+        self.cost += reported.cost;
+        self.calls += 1;
+    }
+
+    /// Share of input tokens served from cache.
+    ///
+    /// Cached tokens are counted inside the input total by every codec, so
+    /// this cannot exceed 1. It is the only observable signal that the
+    /// cache-ordered prompt prefix is still intact: the ordering is an
+    /// invariant with no other symptom when it breaks.
+    fn cache_hit_rate(&self) -> f64 {
+        if self.input == 0 { 0.0 } else { self.cached_input as f64 / self.input as f64 }
+    }
+}
+
 /// Everything a turn needs that does not change between turns.
 struct Session<'a> {
     model: &'a std::sync::Arc<dyn octane_provider::LanguageModel>,
@@ -1429,6 +1607,7 @@ async fn run_turn(
     app: &mut octane_tui::App,
     session: &Session<'_>,
     history: &mut Vec<octane_protocol::Message>,
+    session_usage: &mut SessionUsage,
 ) -> Result<()> {
     let Session { model, workspace, sandbox, mode, thinking, permissions, prompt } = *session;
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
@@ -1508,12 +1687,13 @@ async fn run_turn(
             biased;
 
             Some(event) = events.recv() => {
-                if let octane_protocol::Event::Usage(usage) = &event {
+                if let octane_protocol::Event::Usage(reported) = &event {
                     if let Some(activity) = app.status_mut().activity.as_mut() {
-                        activity.input_tokens = usage.input_tokens;
-                        activity.output_tokens = usage.output_tokens;
+                        activity.input_tokens = reported.input_tokens;
+                        activity.output_tokens = reported.output_tokens;
                     }
-                    app.status_mut().cost_usd += usage.cost;
+                    app.status_mut().cost_usd += reported.cost;
+                    session_usage.add(reported);
                 }
                 app.push_event(&event)?;
             }
@@ -1724,4 +1904,86 @@ fn build_policy(
         builder = builder.allow(rule, Scope::Project);
     }
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn registry() -> octane_tools::ToolRegistry {
+        let mut registry = octane_tools::ToolRegistry::new();
+        octane_tools::register_all(
+            &mut registry,
+            std::sync::Arc::new(octane_tools::FileTracker::new()),
+            octane_sandbox::SandboxPolicy::DangerFullAccess,
+        );
+        registry
+    }
+
+    /// Spot-checks the exact split rather than comparing two derived sets,
+    /// which would hold even if `is_mutating` inverted and both columns moved
+    /// together.
+    #[test]
+    fn plan_mode_hides_exactly_the_mutating_tools() {
+        let listing = render_tools(&registry(), PermissionMode::Plan);
+        let (offered, hidden) = listing.split_once("Hidden by").expect("a hidden section");
+
+        for read_only in ["read", "glob", "grep", "list"] {
+            assert!(offered.contains(read_only), "{read_only} must stay offered in plan mode");
+        }
+        for mutating in ["write", "edit", "bash"] {
+            assert!(hidden.contains(mutating), "{mutating} must be hidden in plan mode");
+            assert!(!offered.contains(mutating), "{mutating} must not also be offered");
+        }
+    }
+
+    #[test]
+    fn every_tool_is_offered_outside_plan_mode() {
+        let listing = render_tools(&registry(), PermissionMode::Default);
+        assert!(!listing.contains("Hidden by"), "nothing is withheld by default");
+        for name in ["read", "write", "edit", "bash", "glob", "grep", "list"] {
+            assert!(listing.contains(name), "{name} missing");
+        }
+    }
+
+    /// The transcript renders markdown, so a listing that starts a line with a
+    /// marker turns into a list, a heading, or a horizontal rule.
+    #[test]
+    fn no_listing_line_is_read_as_markdown() {
+        let mut listings = vec![
+            render_tools(&registry(), PermissionMode::Plan),
+            render_tools(&registry(), PermissionMode::Default),
+        ];
+        listings.push(render_agents(&Utf8PathBuf::from(".")));
+
+        for listing in listings {
+            for line in listing.lines() {
+                let trimmed = line.trim_start();
+                for marker in ["- ", "* ", "+ ", "> ", "# ", "---", "***", "___", "```", "~~~"] {
+                    assert!(
+                        !trimmed.starts_with(marker),
+                        "line would render as markdown: {line:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_cache_hit_rate_cannot_exceed_one() {
+        // Cached tokens are counted inside the input total by every codec, so a
+        // rate above 1 would mean the accounting drifted rather than the cache
+        // performing impossibly well.
+        let mut usage = SessionUsage::default();
+        usage.add(&octane_protocol::Usage {
+            input_tokens: 1_000,
+            output_tokens: 10,
+            cached_input_tokens: 900,
+            reasoning_tokens: 0,
+            cost: 0.0,
+        });
+        assert!((usage.cache_hit_rate() - 0.9).abs() < f64::EPSILON);
+
+        assert_eq!(SessionUsage::default().cache_hit_rate(), 0.0, "no divide by zero");
+    }
 }

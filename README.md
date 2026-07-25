@@ -159,6 +159,8 @@ schema, since an agent that can delegate to itself will.
     /agents      what is defined, and from which scope
     /cs <query>  codebase search; fans out to research subagents
     /thinking    cycle reasoning: auto, off, low, medium, high
+    /tools       what the model can call this turn, and what is withheld
+    /stats       tokens, cache hit rate, and cost
 
 Not every endpoint honours `/thinking off`. Some refuse and reason
 anyway; octane reports the refusal rather than ignoring it.
