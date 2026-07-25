@@ -267,6 +267,11 @@ pub struct ModelEntry {
     /// rather than caching prefixes on its own (OpenAI-style).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explicit_cache_control: Option<bool>,
+
+    /// Default thinking level: `auto`, `off`, `low`, `medium`, `high`, or a
+    /// token budget. Overridable at runtime with `/thinking`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<crate::thinking::Thinking>,
 }
 
 /// Which model each role uses, by key.
@@ -347,6 +352,7 @@ pub struct ResolvedModel {
     pub reasoning: bool,
     pub images: bool,
     pub explicit_cache_control: bool,
+    pub thinking: crate::thinking::Thinking,
 }
 
 /// Context window assumed when nothing says otherwise.
@@ -460,6 +466,7 @@ impl ProviderConfig {
             explicit_cache_control: entry
                 .explicit_cache_control
                 .unwrap_or(matches!(api, ApiType::Anthropic)),
+            thinking: entry.thinking.unwrap_or_default(),
         })
     }
 

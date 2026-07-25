@@ -119,6 +119,7 @@ fn model(api: ApiType, base_url: String, auth: Auth) -> ResolvedModel {
         reasoning: false,
         images: false,
         explicit_cache_control: false,
+        thinking: Default::default(),
     }
 }
 
@@ -132,6 +133,7 @@ fn request() -> ModelRequest {
         max_output_tokens: 1_024,
         temperature: None,
         top_p: None,
+        thinking: Default::default(),
     }
 }
 

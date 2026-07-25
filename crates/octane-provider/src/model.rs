@@ -53,6 +53,9 @@ pub struct ModelRequest {
     pub max_output_tokens: u64,
     pub temperature: Option<f32>,
     pub top_p: Option<f32>,
+    /// How much the model should think. Each format spells this differently,
+    /// and not every endpoint honours `Off` — see [`crate::thinking`].
+    pub thinking: crate::thinking::Thinking,
 }
 
 /// A tool as the model sees it: name, prose contract, JSON Schema.

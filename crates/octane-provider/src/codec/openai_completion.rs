@@ -126,6 +126,17 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     if let Some(top_p) = request.top_p {
         body["top_p"] = json!(top_p);
     }
+
+    // The flat `reasoning_effort` is OpenAI's spelling and is accepted by
+    // OpenRouter too, verified against it — so one form covers both rather than
+    // needing per-provider configuration.
+    //
+    // Grok rejects this field outright (`RESEARCH.md` §L). A model that does
+    // should set `thinking: "auto"`, which sends nothing.
+    let thinking = if request.thinking.is_auto() { model.thinking } else { request.thinking };
+    if let Some(effort) = thinking.effort() {
+        body["reasoning_effort"] = json!(effort);
+    }
     body
 }
 
@@ -414,4 +425,37 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("bad key"));
     }
+    #[test]
+    fn thinking_is_sent_as_the_flat_reasoning_effort() {
+        // Verified against OpenRouter as well as OpenAI, so one form covers both.
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Low;
+        let body = build(&model(ApiType::OpenAiCompletion), &request);
+        assert_eq!(body["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn auto_sends_no_effort_field() {
+        // Grok rejects the field outright, so it must be omittable.
+        let body = build(&model(ApiType::OpenAiCompletion), &request());
+        assert!(body.get("reasoning_effort").is_none());
+    }
+
+    #[test]
+    fn the_models_configured_level_applies_when_the_request_says_auto() {
+        let mut model = model(ApiType::OpenAiCompletion);
+        model.thinking = crate::thinking::Thinking::High;
+        let body = build(&model, &request());
+        assert_eq!(body["reasoning_effort"], "high");
+    }
+
+    #[test]
+    fn the_request_overrides_the_models_default() {
+        let mut model = model(ApiType::OpenAiCompletion);
+        model.thinking = crate::thinking::Thinking::High;
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Low;
+        assert_eq!(build(&model, &request)["reasoning_effort"], "low");
+    }
+
 }

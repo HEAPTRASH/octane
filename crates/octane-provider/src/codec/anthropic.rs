@@ -84,6 +84,23 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
         body["top_p"] = json!(top_p);
     }
 
+    // Anthropic takes a token budget rather than a level, and requires the
+    // budget to be below max_tokens — a budget at or above it is rejected.
+    let thinking = if request.thinking.is_auto() { model.thinking } else { request.thinking };
+    if !thinking.is_auto() {
+        let max_tokens = body["max_tokens"].as_u64().unwrap_or(4_096);
+        match thinking.budget() {
+            Some(0) => body["thinking"] = json!({ "type": "disabled" }),
+            Some(budget) => {
+                let budget = (budget as u64).min(max_tokens.saturating_sub(1)).max(1_024);
+                body["thinking"] = json!({ "type": "enabled", "budget_tokens": budget });
+                // Extended thinking requires an unset temperature.
+                body.as_object_mut().map(|map| map.remove("temperature"));
+            }
+            None => {}
+        }
+    }
+
     // Anthropic caches only what is marked, unlike OpenAI which caches prefixes
     // on its own. The breakpoint goes on the last system block: everything
     // before it is the stable prefix.
@@ -472,4 +489,53 @@ mod tests {
         .unwrap();
         assert!(matches!(events[0], StreamEvent::StepFinish { .. }));
     }
+    #[test]
+    fn thinking_is_sent_as_a_token_budget() {
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::High;
+        let body = build(&model(ApiType::Anthropic), &request);
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert!(body["thinking"]["budget_tokens"].as_u64().unwrap() >= 1_024);
+    }
+
+    #[test]
+    fn the_budget_stays_below_max_tokens() {
+        // Anthropic rejects a budget at or above the output limit outright.
+        let mut model = model(ApiType::Anthropic);
+        model.max_output = 2_000;
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::High;
+        request.max_output_tokens = 2_000;
+
+        let body = build(&model, &request);
+        let budget = body["thinking"]["budget_tokens"].as_u64().unwrap();
+        assert!(budget < 2_000, "budget {budget} must be under max_tokens");
+    }
+
+    #[test]
+    fn extended_thinking_drops_temperature() {
+        // Anthropic rejects the combination.
+        let mut model = model(ApiType::Anthropic);
+        model.temperature = Some(0.7);
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Medium;
+
+        let body = build(&model, &request);
+        assert!(body.get("temperature").is_none());
+    }
+
+    #[test]
+    fn thinking_off_is_sent_explicitly() {
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Off;
+        let body = build(&model(ApiType::Anthropic), &request);
+        assert_eq!(body["thinking"]["type"], "disabled");
+    }
+
+    #[test]
+    fn auto_sends_no_thinking_field_at_all() {
+        let body = build(&model(ApiType::Anthropic), &request());
+        assert!(body.get("thinking").is_none());
+    }
+
 }

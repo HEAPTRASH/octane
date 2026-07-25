@@ -476,7 +476,8 @@ impl App {
                 working: self.status.activity.is_some(),
                 composer_empty: self.composer.is_empty(),
                 approval: self.pending_approval.as_ref().map(|(prompt, _)| prompt),
-                completing: self.completion.is_active(),
+                // A fully typed command must not swallow Enter.
+                completing: self.completion.is_active() && !self.completion.is_exhausted(),
                 on_first_line: self.composer.cursor_position().0 == 0,
                 ends_with_continuation: self.composer.ends_with_continuation(),
             };

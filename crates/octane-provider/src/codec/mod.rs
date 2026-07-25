@@ -134,6 +134,7 @@ mod tests {
             reasoning: false,
             images: false,
             explicit_cache_control: false,
+            thinking: Default::default(),
         }
     }
 
@@ -151,6 +152,7 @@ mod tests {
             max_output_tokens: 1_024,
             temperature: None,
             top_p: None,
+            thinking: Default::default(),
         }
     }
 

@@ -304,6 +304,7 @@ pub fn request_for(
         max_output_tokens: model.max_output_tokens,
         temperature: None,
         top_p: None,
+        thinking: crate::thinking::Thinking::default(),
     }
 }
 
@@ -331,6 +332,7 @@ mod tests {
             reasoning: false,
             images: false,
             explicit_cache_control: false,
+            thinking: Default::default(),
         }
     }
 

@@ -96,6 +96,17 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     if let Some(top_p) = request.top_p {
         body["generationConfig"]["topP"] = json!(top_p);
     }
+
+    // Google takes a budget, where 0 disables and -1 means "decide for me".
+    // `includeThoughts` is separate: a model can think without returning it, so
+    // both have to be set or reasoning is spent and then discarded.
+    let thinking = if request.thinking.is_auto() { model.thinking } else { request.thinking };
+    if let Some(budget) = thinking.budget() {
+        body["generationConfig"]["thinkingConfig"] = json!({
+            "thinkingBudget": budget,
+            "includeThoughts": budget > 0,
+        });
+    }
     body
 }
 
@@ -313,4 +324,33 @@ mod tests {
             other => panic!("got {other:?}"),
         }
     }
+    #[test]
+    fn thinking_is_sent_as_a_budget_with_thoughts_included() {
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Low;
+        let body = build(&model(ApiType::Google), &request);
+
+        let config = &body["generationConfig"]["thinkingConfig"];
+        assert!(config["thinkingBudget"].as_u64().unwrap() > 0);
+        // Without this the model thinks and the reasoning is discarded.
+        assert_eq!(config["includeThoughts"], true);
+    }
+
+    #[test]
+    fn a_zero_budget_also_stops_asking_for_thoughts() {
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Off;
+        let body = build(&model(ApiType::Google), &request);
+
+        let config = &body["generationConfig"]["thinkingConfig"];
+        assert_eq!(config["thinkingBudget"], 0);
+        assert_eq!(config["includeThoughts"], false);
+    }
+
+    #[test]
+    fn auto_sends_no_thinking_config() {
+        let body = build(&model(ApiType::Google), &request());
+        assert!(body["generationConfig"].get("thinkingConfig").is_none());
+    }
+
 }

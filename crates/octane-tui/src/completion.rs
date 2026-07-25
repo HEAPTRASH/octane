@@ -95,6 +95,21 @@ impl Completion {
         !self.candidates.is_empty()
     }
 
+    /// Whether Enter should submit rather than accept.
+    ///
+    /// True when what was typed already *is* the only candidate. Accepting then
+    /// does nothing visible but swallows the keystroke, so the user presses
+    /// Enter, sees no submission, types the next thing, and it lands on the end
+    /// of the command they thought they had sent.
+    pub fn is_exhausted(&self) -> bool {
+        match (&self.trigger, self.candidates.as_slice()) {
+            (Trigger::Command { prefix }, [only]) => {
+                only.value.trim_start_matches('/') == prefix
+            }
+            _ => false,
+        }
+    }
+
     pub fn candidates(&self) -> &[Candidate] {
         &self.candidates
     }
@@ -432,6 +447,34 @@ mod tests {
     fn no_trigger_means_no_popup() {
         assert!(!completion_for("just some prose").is_active());
         assert!(!completion_for("").is_active());
+    }
+
+    #[test]
+    fn a_fully_typed_command_stops_intercepting_enter() {
+        // Otherwise Enter is swallowed, and the next thing typed lands on the
+        // end of the command the user thought they had already sent.
+        let completion = completion_for("/help");
+        assert!(completion.is_active());
+        assert!(completion.is_exhausted());
+    }
+
+    #[test]
+    fn a_partial_command_still_wants_enter() {
+        let completion = completion_for("/hel");
+        assert!(completion.is_active());
+        assert!(!completion.is_exhausted());
+    }
+
+    #[test]
+    fn an_ambiguous_command_still_wants_enter() {
+        // `/re` matches both /review and /resume, so Enter should pick one.
+        assert!(!completion_for("/re").is_exhausted());
+    }
+
+    #[test]
+    fn file_completion_never_counts_as_exhausted() {
+        // A path is rarely typed in full, and accepting is the point.
+        assert!(!completion_for("@src/main.rs").is_exhausted());
     }
 
     #[test]

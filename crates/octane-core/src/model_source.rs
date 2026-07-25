@@ -25,6 +25,7 @@ use crate::CoreError;
 pub struct ModelStepSource {
     model: Arc<dyn LanguageModel>,
     tools: Vec<ToolSchema>,
+    thinking: octane_provider::thinking::Thinking,
 }
 
 impl std::fmt::Debug for ModelStepSource {
@@ -38,7 +39,13 @@ impl std::fmt::Debug for ModelStepSource {
 
 impl ModelStepSource {
     pub fn new(model: Arc<dyn LanguageModel>, tools: Vec<ToolSchema>) -> Self {
-        Self { model, tools }
+        Self { model, tools, thinking: Default::default() }
+    }
+
+    /// Override the model's configured thinking level for this session.
+    pub fn with_thinking(mut self, thinking: octane_provider::thinking::Thinking) -> Self {
+        self.thinking = thinking;
+        self
     }
 
     pub fn model(&self) -> &Arc<dyn LanguageModel> {
@@ -60,6 +67,7 @@ impl StepSource for ModelStepSource {
             max_output_tokens: info.max_output_tokens,
             temperature: None,
             top_p: None,
+            thinking: self.thinking,
         };
 
         let mut stream = self.model.stream(request).await?;

@@ -81,6 +81,12 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     if let Some(temperature) = request.temperature.or(model.temperature) {
         body["temperature"] = json!(temperature);
     }
+
+    // Nested under `reasoning` here, unlike the flat field Completions takes.
+    let thinking = if request.thinking.is_auto() { model.thinking } else { request.thinking };
+    if let Some(effort) = thinking.effort() {
+        body["reasoning"] = json!({ "effort": effort, "summary": "auto" });
+    }
     body
 }
 
@@ -326,4 +332,19 @@ mod tests {
         );
         assert!(result.unwrap_err().to_string().contains("rate limited"));
     }
+    #[test]
+    fn thinking_is_nested_under_reasoning() {
+        let mut request = request();
+        request.thinking = crate::thinking::Thinking::Medium;
+        let body = build(&model(ApiType::OpenAiResponses), &request);
+        assert_eq!(body["reasoning"]["effort"], "medium");
+        // A summary is requested, or the reasoning is spent and never returned.
+        assert_eq!(body["reasoning"]["summary"], "auto");
+    }
+
+    #[test]
+    fn auto_sends_no_reasoning_field() {
+        assert!(build(&model(ApiType::OpenAiResponses), &request()).get("reasoning").is_none());
+    }
+
 }

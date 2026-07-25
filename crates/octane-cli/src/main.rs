@@ -323,6 +323,11 @@ async fn interactive(
         Err(_) => None,
     };
     let mut history: Vec<octane_protocol::Message> = Vec::new();
+    // Runtime override for the model's configured default.
+    let mut thinking = selected
+        .as_ref()
+        .map(|resolved| resolved.thinking)
+        .unwrap_or_default();
 
     // Configuration problems are said once, at the top, rather than surfacing as
     // a confusing failure on the first prompt.
@@ -352,9 +357,12 @@ async fn interactive(
             AppEvent::Interrupt => {}
             AppEvent::ModeChanged(_) => {}
 
-            AppEvent::Submit(Submission::Command { name, .. }) => {
-                app.push_event(&completed_static(ItemKind::UserMessage { text: format!("/{name}") }))?;
+            AppEvent::Submit(Submission::Command { name, args }) => {
+                let echoed =
+                    if args.is_empty() { format!("/{name}") } else { format!("/{name} {args}") };
+                app.push_event(&completed_static(ItemKind::UserMessage { text: echoed }))?;
                 let body = match name.as_str() {
+                    "thinking" => set_thinking(&mut app, &mut thinking, &args),
                     "help" => HELP.to_string(),
                     "models" => render_models(workspace),
                     "connect" => render_connect_list(),
@@ -422,7 +430,8 @@ async fn interactive(
                     prompt,
                 ));
 
-                run_turn(&mut app, model, &mut history, workspace, &sandbox, mode).await?;
+                run_turn(&mut app, model, &mut history, workspace, &sandbox, mode, thinking)
+                    .await?;
             }
         }
     }
@@ -436,6 +445,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/help", "show the key reference"),
     ("/models", "list configured models"),
     ("/connect", "set up a provider"),
+    ("/thinking", "show or set reasoning: off, low, medium, high"),
     ("/clear", "clear the transcript"),
     ("/exit", "quit octane"),
 ];
@@ -705,6 +715,50 @@ fn completed_static(kind: octane_protocol::ItemKind) -> octane_protocol::Event {
     })
 }
 
+/// `/thinking` — with no argument, toggle whether reasoning is shown; with one,
+/// set how hard the model thinks.
+///
+/// Two different things behind one command because users reach for the same word
+/// for both, and separating them into `/reasoning` and `/thinking` would be a
+/// distinction nobody remembers.
+fn set_thinking(
+    app: &mut octane_tui::App,
+    thinking: &mut octane_provider::Thinking,
+    args: &str,
+) -> String {
+    use octane_tui::render::Reasoning;
+
+    if args.trim().is_empty() {
+        let showing = app.options_mut().reasoning == Reasoning::Shown;
+        app.options_mut().reasoning =
+            if showing { Reasoning::Hidden } else { Reasoning::Shown };
+        return format!(
+            "Reasoning is now {}. Effort is {}.\n\n  /thinking off | low | medium | high | <tokens>\n",
+            if showing { "hidden" } else { "shown" },
+            thinking.label(),
+        );
+    }
+
+    match args.parse::<octane_provider::Thinking>() {
+        Ok(level) => {
+            *thinking = level;
+            let mut note = format!("Thinking effort set to {}.", level.label());
+            // Said up front rather than discovered as a failed request: several
+            // endpoints refuse to stop reasoning at all.
+            if level.is_off() {
+                note.push_str(concat!(
+                    "\n\n",
+                    "  Not every endpoint honours this. Gemini and GPT-OSS via OpenRouter\n",
+                    "  both refuse outright and reason anyway. Effort levels do work there,\n",
+                    "  so `/thinking low` is the lever that always does something.",
+                ));
+            }
+            note
+        }
+        Err(error) => format!("{error}"),
+    }
+}
+
 /// Drive one turn, streaming events into the UI as they arrive.
 ///
 /// The turn runs on its own task while this loop pumps both the event channel
@@ -718,6 +772,7 @@ async fn run_turn(
     workspace: &Utf8PathBuf,
     sandbox: &SandboxPolicy,
     mode: PermissionMode,
+    thinking: octane_provider::Thinking,
 ) -> Result<()> {
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
     use octane_permission::{Policy, Scope};
@@ -747,7 +802,7 @@ async fn run_turn(
 
     let cancel = runner.cancel.clone();
     let tools = registry.schemas_where(|_| true);
-    let source = ModelStepSource::new(model.clone(), tools);
+    let source = ModelStepSource::new(model.clone(), tools).with_thinking(thinking);
 
     let turn_history = history.clone();
     let workspace_owned = workspace.clone();

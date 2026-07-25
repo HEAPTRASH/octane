@@ -20,6 +20,7 @@ pub mod registry;
 pub mod sse;
 pub mod pricing;
 pub mod stream;
+pub mod thinking;
 pub mod transform;
 pub mod transport;
 
@@ -31,6 +32,7 @@ pub use connect::{Credential, Recipe, recipes};
 pub use registry::Registry;
 pub use model::{LanguageModel, ModelInfo, ModelRequest, ModelSelector, ProviderId};
 pub use stream::{FinishReason, StreamEvent};
+pub use thinking::Thinking;
 pub use transform::ProviderTransform;
 pub use transport::{HttpModel, connect};
 
