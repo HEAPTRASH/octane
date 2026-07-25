@@ -729,6 +729,7 @@ dependencies = [
  "anyhow",
  "camino",
  "clap",
+ "crossterm",
  "octane-core",
  "octane-memory",
  "octane-permission",

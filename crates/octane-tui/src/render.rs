@@ -38,11 +38,25 @@ pub enum Reasoning {
     Shown,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct RenderOptions {
     pub detail: Detail,
     pub reasoning: Reasoning,
     pub theme: Theme,
+    /// Marker glyphs. Carried here rather than hardcoded so a terminal without
+    /// dependable Unicode gets the ASCII set throughout, not just in the banner.
+    pub glyphs: crate::glyphs::Glyphs,
+}
+
+impl Default for RenderOptions {
+    fn default() -> Self {
+        Self {
+            detail: Detail::default(),
+            reasoning: Reasoning::default(),
+            theme: Theme::default(),
+            glyphs: crate::glyphs::UNICODE,
+        }
+    }
 }
 
 /// Render one event as scrollback lines.
@@ -59,6 +73,7 @@ pub fn render_event(event: &Event, options: &RenderOptions) -> Vec<Line<'static>
             // thing that can happen to a user mid-session — the agent appears to
             // forget, with no explanation anywhere.
             vec![notice(
+                options.glyphs.notice,
                 format!(
                     "context compacted ({strategy}): {} → {} tokens",
                     thousands(*before_tokens),
@@ -80,11 +95,12 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
         return Vec::new();
     };
     let theme = &options.theme;
+    let glyphs = &options.glyphs;
 
     match &item.kind {
         ItemKind::UserMessage { text } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("› ", theme.label(theme.user)),
+                Span::styled(format!("{} ", glyphs.prompt), theme.label(theme.user)),
                 Span::styled(first_line(text), Style::default().fg(theme.user)),
             ])];
             // Continuation lines are indented to match the marker width, so a
@@ -120,7 +136,7 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
 
         ItemKind::ToolExecution { name, input, .. } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("● ", Style::default().fg(status_color(item.status, theme))),
+                Span::styled(format!("{} ", glyphs.tool), Style::default().fg(status_color(item.status, theme))),
                 Span::styled(name.clone(), theme.label(theme.tool)),
                 Span::styled(format!("  {}", summarize_input(name, input)), theme.dim()),
             ])];
@@ -135,7 +151,7 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
 
         ItemKind::Diff { path, unified } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("✎ ", theme.label(theme.tool)),
+                Span::styled(format!("{} ", glyphs.edit), theme.label(theme.tool)),
                 Span::raw(path.clone()),
             ])];
             lines.extend(render_diff(unified, theme));
@@ -144,13 +160,13 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
         }
 
         ItemKind::Approval(request) => vec![Line::from(vec![
-            Span::styled("? ", theme.label(theme.warning)),
+            Span::styled(format!("{} ", glyphs.question), theme.label(theme.warning)),
             Span::raw(request.summary.clone()),
         ])],
 
         ItemKind::Error { message } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled("✗ ", theme.label(theme.error)),
+                Span::styled(format!("{} ", glyphs.error), theme.label(theme.error)),
                 Span::styled(message.clone(), Style::default().fg(theme.error)),
             ])];
             lines.push(Line::default());
@@ -222,9 +238,9 @@ fn status_color(status: ItemStatus, theme: &Theme) -> ratatui::style::Color {
     }
 }
 
-fn notice(text: String, color: ratatui::style::Color) -> Line<'static> {
+fn notice(marker: &str, text: String, color: ratatui::style::Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled("· ", Style::default().fg(color)),
+        Span::styled(format!("{marker} "), Style::default().fg(color)),
         Span::styled(text, Style::default().fg(color)),
     ])
 }
@@ -418,6 +434,17 @@ mod tests {
             diff: None,
         }));
         assert!(text_of(&render(&event)).contains("Removes the build directory"));
+    }
+
+    #[test]
+    fn the_ascii_glyph_set_reaches_the_transcript() {
+        // The fallback is worthless if it only applies to the banner.
+        let options = RenderOptions { glyphs: crate::glyphs::ASCII, ..Default::default() };
+        let event = completed(ItemKind::UserMessage { text: "hello".into() });
+
+        let rendered = text_of(&render_event(&event, &options));
+        assert!(rendered.starts_with("> "), "got {rendered:?}");
+        assert!(rendered.is_ascii());
     }
 
     #[test]

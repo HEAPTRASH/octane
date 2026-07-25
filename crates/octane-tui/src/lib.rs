@@ -34,7 +34,9 @@
 
 pub mod app;
 pub mod approval;
+pub mod banner;
 pub mod composer;
+pub mod glyphs;
 pub mod keymap;
 pub mod render;
 pub mod status;
@@ -44,5 +46,6 @@ pub use app::{App, AppEvent};
 pub use approval::{ApprovalPrompt, ApprovalReply, TuiApprover};
 pub use composer::{Composer, Submission};
 pub use keymap::{KeyAction, KeyContext};
+pub use glyphs::Glyphs;
 pub use status::StatusLine;
-pub use theme::Theme;
+pub use theme::{ColorDepth, Theme};

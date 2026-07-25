@@ -36,6 +36,11 @@ def main() -> int:
     pid, fd = pty.fork()
     if pid == 0:
         os.environ["TERM"] = "xterm-256color"
+        os.environ["COLORTERM"] = "truecolor"
+        os.environ["LANG"] = "en_US.UTF-8"
+        # The sweep would otherwise dominate the startup byte count and make the
+        # idle measurement below meaningless.
+        os.environ["OCTANE_NO_ANIMATION"] = "1"
         os.execv(binary, [binary])
 
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -97,9 +102,20 @@ def main() -> int:
     send(b"\x03")
     pump(1.0)
 
-    plain = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", captured.decode("utf-8", "replace"))
+    raw = captured.decode("utf-8", "replace")
+    plain = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", raw)
+
+    # Colour lives in the escape sequences, so it has to be checked before they
+    # are stripped.
+    if "38;2;149;214;0" in raw:
+        print("ok    acid green #95D600")
+    else:
+        failures.append("brand colour missing from output")
+
     for label, needle in {
-        "banner": "octane",
+        "wordmark": "\u2588",
+        "claw mark": "\u2571\u2571\u2571",
+        "hints": "shift+tab",
         "shell output": "tui-smoke-ok",
         "mode cycled": "accept-edits",
         "status line": "ctx 0%",

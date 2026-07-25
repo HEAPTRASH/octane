@@ -69,6 +69,14 @@ Everything in `octane-tui` except `app` is pure — state in, lines out — beca
 
 Two things must hold or the region visibly flickers, and neither is catchable by a unit test because both render *correctly*: the region is only redrawn when something changed, and `Terminal::resize` is only called when the size genuinely changed (it resets ratatui's buffers, discarding the cell diff). `scripts/tui-smoke.py` measures it on the wire — idle output must be ~0 bytes, not 9.6 KB/s.
 
+## Look and feel
+
+Monster-inspired: black base, acid green (`#95D600`, the brand's own value), high contrast. The startup wordmark animates a charge pulse across itself — two passes, ~600ms — before settling into scrollback, because content committed to scrollback is never redrawn and anything that moves has to move before it lands.
+
+Three colour tiers, detected rather than assumed: exact hexes on truecolor, nearest xterm-256 indices otherwise, and bold/dim only under `NO_COLOR` or `TERM=dumb`. `NO_COLOR` is honoured because people set it for a reason.
+
+Glyphs are chosen for **width safety**, not just availability. A character that renders double-width in one terminal and single in another silently destroys every box and aligned column, and the breakage is invisible until someone reports it from a terminal you don't have. Everything comes from ranges that are unambiguously narrow — box drawing, block elements, geometric shapes, braille, arrows. Emoji, Nerd Font glyphs, and emoji-presentation symbols like `⚡` and `✔` are excluded; `✓` is text presentation and safe, its neighbour is not. A full ASCII set covers terminals without dependable Unicode, and it reaches the transcript and status line, not just the banner.
+
 ## The two layers that are easy to conflate
 
 **Policy** (`octane-permission`) asks *should this be allowed?* and runs before a command does.
@@ -96,7 +104,7 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 343 tests
+cargo test --workspace       # 371 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

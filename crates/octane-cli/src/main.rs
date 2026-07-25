@@ -256,23 +256,40 @@ async fn interactive(
     use octane_tui::{App, AppEvent, StatusLine, Submission};
 
     let contained = sandbox.is_contained();
+
+    // Logo, tagline, and hints go to stdout *before* the inline viewport starts,
+    // so they land in real scrollback and scroll away naturally as the session
+    // grows. The animation has to happen here too: once content is committed to
+    // scrollback it is never redrawn.
+    let theme = octane_tui::Theme::default();
+    let glyphs = octane_tui::Glyphs::detect();
+    let width = crossterm::terminal::size().map(|(w, _)| w).unwrap_or(80);
+    let is_tty = std::io::IsTerminal::is_terminal(&std::io::stdout());
+
+    {
+        use std::io::Write;
+        let mut stdout = std::io::stdout();
+        octane_tui::banner::draw(
+            &mut stdout,
+            width,
+            &theme,
+            &glyphs,
+            octane_tui::banner::should_animate(is_tty, theme.depth),
+        )?;
+        write!(stdout, "\n{}", octane_tui::banner::tips(width, &theme, &glyphs, workspace.as_str(), contained))?;
+        stdout.flush()?;
+    }
+
     let mut app = App::new(StatusLine {
         mode,
         model: model.unwrap_or("unset").to_string(),
+        glyphs,
         ..Default::default()
     })?;
-
-    let banner = vec![
-        ratatui::text::Line::from(format!("octane {}", env!("CARGO_PKG_VERSION"))),
-        ratatui::text::Line::from(format!(
-            "{}  ·  sandbox {}",
-            workspace,
-            if contained { "on" } else { "OFF" }
-        )),
-        ratatui::text::Line::from("/help for commands · !cmd to run a shell command · ctrl+c to exit"),
-        ratatui::text::Line::default(),
-    ];
-    app.push_lines(banner)?;
+    // The detected set must reach the transcript too, or the fallback applies to
+    // the banner and nothing else.
+    app.options_mut().glyphs = glyphs;
+    app.options_mut().theme = theme;
 
     let completed = |kind: ItemKind| {
         octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {

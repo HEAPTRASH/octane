@@ -23,6 +23,8 @@ pub struct StatusLine {
     pub cost_usd: f64,
     /// Shown while the agent is working.
     pub activity: Option<Activity>,
+    /// Marker glyphs, so the ASCII fallback reaches the status line too.
+    pub glyphs: crate::glyphs::Glyphs,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,7 @@ impl Default for StatusLine {
             context_used: 0.0,
             cost_usd: 0.0,
             activity: None,
+            glyphs: crate::glyphs::UNICODE,
         }
     }
 }
@@ -82,15 +85,19 @@ impl StatusLine {
     /// The transient activity line shown above the composer while working.
     pub fn activity_line(&self, spinner_frame: usize) -> Option<String> {
         let activity = self.activity.as_ref()?;
-        let frame = SPINNER[spinner_frame % SPINNER.len()];
+        let frames = self.glyphs.spinner;
+        let frame = frames[spinner_frame % frames.len()];
 
         let mut line = format!("{frame} {} · {}s", activity.label, activity.elapsed_secs);
         // Token counters only once there is something to count, so an idle
         // moment does not read as "0 tokens used".
         if activity.input_tokens > 0 || activity.output_tokens > 0 {
             line.push_str(&format!(
-                " · ↑{} ↓{}",
+                " {} {}{} {}{}",
+                self.glyphs.separator,
+                self.glyphs.arrow_up,
                 compact(activity.input_tokens),
+                self.glyphs.arrow_down,
                 compact(activity.output_tokens)
             ));
         }
@@ -110,7 +117,6 @@ impl StatusLine {
     }
 }
 
-const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Segment {
@@ -256,7 +262,7 @@ mod tests {
         let second = working.activity_line(1).unwrap();
         assert_ne!(first, second);
         // Must not panic past the end of the frame list.
-        assert_eq!(working.activity_line(SPINNER.len()).unwrap(), first);
+        assert_eq!(working.activity_line(working.glyphs.spinner.len()).unwrap(), first);
     }
 
     #[test]
