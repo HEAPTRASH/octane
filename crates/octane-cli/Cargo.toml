@@ -1,0 +1,30 @@
+[package]
+name = "octane-cli"
+description = "The octane binary."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "octane"
+path = "src/main.rs"
+
+[dependencies]
+octane-core.workspace = true
+octane-memory.workspace = true
+octane-permission.workspace = true
+octane-protocol.workspace = true
+octane-sandbox.workspace = true
+octane-tui.workspace = true
+
+anyhow.workspace = true
+camino.workspace = true
+clap.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

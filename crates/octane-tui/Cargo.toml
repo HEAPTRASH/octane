@@ -1,0 +1,20 @@
+[package]
+name = "octane-tui"
+description = "Terminal client. Subscribes to core events; contains no agent logic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+octane-core.workspace = true
+octane-protocol.workspace = true
+octane-permission.workspace = true
+crossterm.workspace = true
+ratatui.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

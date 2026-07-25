@@ -1,0 +1,15 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# direnv / nix
+/.direnv/
+/result
+/result-*
+
+# local secrets and overrides — never committed
+/.env.local
+/OCTANE.local.md
+
+# research cache (Firecrawl scrapes)
+/.firecrawl/

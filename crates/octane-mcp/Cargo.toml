@@ -1,0 +1,25 @@
+[package]
+name = "octane-mcp"
+description = "MCP client: JSON-RPC lifecycle over stdio and streamable HTTP."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+octane-provider.workspace = true
+octane-tools.workspace = true
+octane-protocol.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+octane-permission.workspace = true
+
+[lints]
+workspace = true

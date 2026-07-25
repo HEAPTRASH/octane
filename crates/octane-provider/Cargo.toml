@@ -1,0 +1,20 @@
+[package]
+name = "octane-provider"
+description = "Provider abstraction: one interface over many model APIs, with per-provider quirks isolated."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+octane-protocol.workspace = true
+
+async-trait.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

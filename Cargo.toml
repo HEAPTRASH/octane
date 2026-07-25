@@ -1,0 +1,67 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/raymond/octane-agent"
+
+[workspace.dependencies]
+# internal
+octane-commands = { path = "crates/octane-commands" }
+octane-context = { path = "crates/octane-context" }
+octane-core = { path = "crates/octane-core" }
+octane-mcp = { path = "crates/octane-mcp" }
+octane-memory = { path = "crates/octane-memory" }
+octane-permission = { path = "crates/octane-permission" }
+octane-protocol = { path = "crates/octane-protocol" }
+octane-provider = { path = "crates/octane-provider" }
+octane-sandbox = { path = "crates/octane-sandbox" }
+octane-skills = { path = "crates/octane-skills" }
+octane-tools = { path = "crates/octane-tools" }
+octane-tui = { path = "crates/octane-tui" }
+
+# async
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time", "signal"] }
+tokio-stream = "0.1"
+async-trait = "0.1"
+futures = "0.3"
+
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# errors + logging
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# cli + tui
+clap = { version = "4", features = ["derive", "env"] }
+ratatui = "0.29"
+crossterm = "0.28"
+
+# misc
+uuid = { version = "1", features = ["v7", "serde"] }
+jiff = { version = "0.2", features = ["serde"] }
+camino = { version = "1", features = ["serde1"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# Deny the sharp edges; the rest stays advisory while the shape is still moving.
+todo = "allow"
+dbg_macro = "warn"
+unwrap_used = "warn"
+expect_used = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

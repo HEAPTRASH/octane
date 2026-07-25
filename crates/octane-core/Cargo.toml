@@ -1,0 +1,31 @@
+[package]
+name = "octane-core"
+description = "The ReAct loop and session orchestration."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+octane-protocol.workspace = true
+octane-provider.workspace = true
+octane-tools.workspace = true
+octane-permission.workspace = true
+octane-sandbox.workspace = true
+octane-context.workspace = true
+octane-memory.workspace = true
+octane-skills.workspace = true
+octane-commands.workspace = true
+async-trait.workspace = true
+camino.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util = "0.7"
+tracing.workspace = true
+
+[lints]
+workspace = true
