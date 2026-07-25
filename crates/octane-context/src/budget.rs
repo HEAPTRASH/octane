@@ -48,12 +48,19 @@ impl Budget {
     /// The 13k gap exists because compaction itself needs room to run: it makes
     /// a model call, and a "compact now" that cannot fit its own request is
     /// useless.
+    ///
+    /// Both gaps are capped by a share of the window, or they swallow it whole.
+    /// Subtracting a flat 13k from a window smaller than 13k saturates to zero,
+    /// which puts the model permanently over the compaction threshold: it can
+    /// never take a step, and the session fails on its first turn. That is
+    /// exactly the local models octane supports through `Auth::None`.
     pub fn for_model(info: &ModelInfo) -> Self {
         let effective_window = info.effective_context_window() as usize;
         Self {
             effective_window,
-            compact_threshold: effective_window.saturating_sub(13_000),
-            warn_threshold: effective_window.saturating_sub(20_000),
+            compact_threshold: effective_window
+                .saturating_sub((effective_window / 10).min(13_000)),
+            warn_threshold: effective_window.saturating_sub((effective_window / 6).min(20_000)),
         }
     }
 
@@ -187,9 +194,41 @@ mod tests {
 
     #[test]
     fn small_windows_do_not_underflow() {
-        // A 4k model: saturating_sub must not wrap into a huge threshold.
+        // A 4k model: saturating_sub must not wrap into a huge threshold. It
+        // must also not saturate to zero, which does not wrap but does put the
+        // model permanently over the threshold.
         let budget = Budget::for_model(&model(4_096, 1_024));
-        assert_eq!(budget.compact_threshold, 0);
-        assert_eq!(budget.pressure(1, 0), Pressure::ShouldCompact);
+        assert!(budget.compact_threshold > 0);
+        assert!(budget.compact_threshold < budget.effective_window());
+    }
+
+    #[test]
+    fn a_small_window_model_can_still_take_a_step() {
+        // A flat 13k gap saturates to zero below a 13k window, which leaves the
+        // model permanently over the compaction threshold: every turn fails
+        // before it starts. Local endpoints are commonly 8k or less, and octane
+        // advertises them through `Auth::None`.
+        for window in [4_096u64, 8_192, 9_000, 16_000] {
+            let budget = Budget::for_model(&model(window, window / 4));
+            assert!(
+                budget.compact_threshold > 0,
+                "{window}: compaction must not trigger at zero usage"
+            );
+            assert_eq!(
+                budget.pressure(1, 0),
+                Pressure::Comfortable,
+                "{window}: a nearly empty history must be comfortable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_large_window_keeps_the_documented_gaps() {
+        // The share only binds on small windows. The 200k case is what the
+        // thresholds were derived from and must not move.
+        let budget = Budget::for_model(&model(200_000, 20_000));
+        assert_eq!(budget.effective_window(), 180_000);
+        assert_eq!(budget.compact_threshold, 167_000);
+        assert_eq!(budget.warn_threshold, 160_000);
     }
 }
