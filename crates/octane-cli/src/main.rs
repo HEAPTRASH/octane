@@ -397,6 +397,29 @@ async fn interactive(
         let Some(event) = app.poll()? else { continue };
 
         match event {
+            AppEvent::Picked { kind: octane_tui::PickerKind::Provider, key } => {
+                match connect_provider(workspace, &key) {
+                    Ok(report) => {
+                        app.push_event(&completed_static(ItemKind::AgentMessage {
+                            text: report,
+                        }))?;
+                        // The registry is read at startup, so a provider added
+                        // now is not usable until restart. Better said than
+                        // discovered by a prompt that still reports no model.
+                        app.push_event(&completed_static(ItemKind::AgentMessage {
+                            text: "Restart octane to use it.".into(),
+                        }))?;
+                    }
+                    Err(error) => {
+                        app.push_event(&completed_static(ItemKind::Error {
+                            message: error.to_string(),
+                        }))?;
+                    }
+                }
+            }
+
+            AppEvent::Picked { .. } => {}
+
             AppEvent::Exit => break,
             AppEvent::Interrupt => {}
             AppEvent::ModeChanged(_) => {}
@@ -438,7 +461,10 @@ async fn interactive(
                     "thinking" => set_thinking(&mut app, &mut thinking, &args),
                     "help" => HELP.to_string(),
                     "models" => render_models(workspace),
-                    "connect" => render_connect_list(),
+                    "connect" => {
+                        app.set_picker(connect_picker());
+                        continue;
+                    }
                     "agents" => render_agents(workspace),
                     other if skill_body(workspace, other).is_some() => {
                         // Tier 2: the body is read only now, on activation.
@@ -659,6 +685,93 @@ fn connect(workspace: &Utf8PathBuf, provider: Option<&str>, user_scope: bool) ->
         println!("  Note: {note}");
     }
     Ok(())
+}
+
+/// The `/connect` overlay.
+///
+/// Providers whose credential is already present are listed first: they are the
+/// ones that will work, and burying them under six that need a key first is the
+/// wrong order to read in.
+fn connect_picker() -> octane_tui::Picker {
+    use octane_provider::connect as setup;
+    use octane_tui::{PickerItem, PickerKind};
+
+    let mut items: Vec<PickerItem> = setup::recipes()
+        .into_iter()
+        .map(|recipe| {
+            let ready = setup::is_satisfied(&recipe, |name| std::env::var(name).ok());
+            let state = match &recipe.credential {
+                octane_provider::Credential::None => "ready".to_string(),
+                octane_provider::Credential::TokenFile => "needs a token file".to_string(),
+                octane_provider::Credential::ApiKey { env_var } => {
+                    if ready {
+                        format!("{env_var} is set")
+                    } else {
+                        format!("needs {env_var}")
+                    }
+                }
+            };
+            // Still selectable without the key: writing the file first and
+            // exporting second is a perfectly reasonable order to work in.
+            PickerItem::new(recipe.key, recipe.name).detail(recipe.help_url).state(state)
+        })
+        .collect();
+
+    items.sort_by_key(|item| {
+        let ready = item.state.as_deref().is_some_and(|state| {
+            state == "ready" || state.ends_with("is set")
+        });
+        (!ready, item.label.clone())
+    });
+
+    octane_tui::Picker::new(PickerKind::Provider, "Connect a provider", items)
+}
+
+/// Write a provider file and say what remains.
+fn connect_provider(workspace: &Utf8PathBuf, key: &str) -> Result<String> {
+    use octane_provider::connect as setup;
+
+    let recipe = setup::recipe(key)
+        .ok_or_else(|| anyhow::anyhow!("unknown provider {key:?}"))?;
+
+    let root = workspace.join(".octane").into_std_path_buf();
+    let config = setup::build_config(&recipe);
+    let path = setup::write_config(&root, &recipe, &config)?;
+
+    let mut report = format!("Wrote `{}`\n\n", path.display());
+    for (name, model) in &config.models {
+        report.push_str(&format!(
+            "- `{}/{}` — {}\n",
+            recipe.key,
+            name,
+            model.name.as_deref().unwrap_or("")
+        ));
+    }
+
+    if let Some(variable) = recipe.credential.env_var() {
+        report.push('\n');
+        if setup::is_satisfied(&recipe, |name| std::env::var(name).ok()) {
+            report.push_str(&format!("`{variable}` is set.\n"));
+        } else {
+            // Built line by line rather than with continuations: a `\` in a
+            // Rust literal strips the newline but the indentation survives into
+            // the rendered output as a run of spaces.
+            report.push_str(&format!("Set `{variable}` to finish:\n\n"));
+            report.push_str("```\n");
+            report.push_str(&format!("export {variable}=...\n"));
+            report.push_str("```\n\n");
+            report.push_str(&format!("Get one at {}\n\n", recipe.help_url));
+            report.push_str(
+                "The file references the variable rather than storing the key, ",
+            );
+            report.push_str("so it is safe to commit.\n");
+        }
+    }
+
+    if let Some(note) = recipe.note {
+        report.push_str(&format!("\n> {note}\n"));
+    }
+    Ok(report)
 }
 
 /// The provider menu, shared by `octane connect` and `/connect`.

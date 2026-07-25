@@ -70,6 +70,8 @@ const TICK: Duration = Duration::from_millis(80);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppEvent {
     Submit(Submission),
+    /// A picker row was chosen.
+    Picked { kind: crate::picker::PickerKind, key: String },
     ModeChanged(PermissionMode),
     Interrupt,
     Exit,
@@ -100,6 +102,8 @@ pub struct App {
     /// The item currently streaming: its id, accumulated text, and whether it is
     /// reasoning rather than prose.
     streaming: Option<(octane_protocol::ItemId, String, bool)>,
+    /// An open selection overlay.
+    picker: Option<crate::picker::Picker>,
 }
 
 impl std::fmt::Debug for App {
@@ -159,6 +163,7 @@ impl App {
             raw_mode: true,
             dirty: true,
             streaming: None,
+            picker: None,
         })
     }
 
@@ -288,6 +293,16 @@ impl App {
         self.dirty = true;
     }
 
+    /// Open a selection overlay.
+    pub fn set_picker(&mut self, picker: crate::picker::Picker) {
+        self.picker = Some(picker);
+        self.dirty = true;
+    }
+
+    pub fn has_picker(&self) -> bool {
+        self.picker.is_some()
+    }
+
     pub fn has_pending_approval(&self) -> bool {
         self.pending_approval.is_some()
     }
@@ -315,6 +330,7 @@ impl App {
         let theme = self.options.theme;
         let glyphs = self.glyphs;
         let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
+        let picker_state = self.picker.clone();
         let workspace = self.workspace.clone();
         let sandboxed = self.sandboxed;
 
@@ -412,6 +428,12 @@ impl App {
 
             frame.render_widget(status_paragraph(&status, &theme, &glyphs), chunks[5]);
 
+            if let Some(picker) = &picker_state {
+                let area = centred(frame.area(), 66, picker_height(picker));
+                frame.render_widget(Clear, area);
+                frame.render_widget(picker_widget(picker, &theme, &glyphs), area);
+            }
+
             // The popup floats above the composer, so it never displaces the
             // input the user is typing into.
             if completion.is_active() {
@@ -499,6 +521,7 @@ impl App {
                 completing: self.completion.is_active() && !self.completion.is_exhausted(),
                 on_first_line: self.composer.cursor_position().0 == 0,
                 ends_with_continuation: self.composer.ends_with_continuation(),
+                picking: self.picker.is_some(),
             };
             keymap::route(key, &ctx)
         };
@@ -618,6 +641,51 @@ impl App {
             }
             KeyAction::Interrupt => Some(AppEvent::Interrupt),
             KeyAction::Exit => Some(AppEvent::Exit),
+
+            KeyAction::PickerNext => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.select_next();
+                }
+                None
+            }
+            KeyAction::PickerPrevious => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.select_previous();
+                }
+                None
+            }
+            KeyAction::PickerFilter(ch) => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.push_filter(ch);
+                }
+                None
+            }
+            KeyAction::PickerUnfilter => {
+                if let Some(picker) = self.picker.as_mut() {
+                    picker.pop_filter();
+                }
+                None
+            }
+            KeyAction::PickerCancel => {
+                self.picker = None;
+                None
+            }
+            KeyAction::PickerChoose => {
+                let chosen = self
+                    .picker
+                    .as_ref()
+                    .and_then(|picker| picker.choose().map(ToString::to_string));
+                match chosen {
+                    Some(key) => {
+                        let kind = self.picker.as_ref().map(|picker| picker.kind);
+                        self.picker = None;
+                        kind.map(|kind| AppEvent::Picked { kind, key })
+                    }
+                    // A disabled row keeps the overlay open rather than
+                    // silently doing nothing to a screen that looks live.
+                    None => None,
+                }
+            }
 
             KeyAction::Approve(reply) => {
                 self.answer(reply);
@@ -832,6 +900,99 @@ fn is_reasoning(kind: &octane_protocol::ItemKind) -> bool {
     matches!(kind, octane_protocol::ItemKind::Reasoning { .. })
 }
 
+/// Rows a picker needs: border, title, filter, and its visible rows.
+fn picker_height(picker: &crate::picker::Picker) -> u16 {
+    let rows = picker.visible().0.len().max(1);
+    u16::try_from(rows).unwrap_or(10) + 4
+}
+
+/// A box of the given width and height, centred in `area`.
+fn centred(area: Rect, width: u16, height: u16) -> Rect {
+    // Clamped, so a small terminal gets a smaller box rather than a box that
+    // starts off-screen.
+    let width = width.min(area.width.saturating_sub(2)).max(20);
+    let height = height.min(area.height.saturating_sub(2)).max(5);
+    Rect {
+        x: area.x + (area.width.saturating_sub(width)) / 2,
+        y: area.y + (area.height.saturating_sub(height)) / 2,
+        width,
+        height,
+    }
+}
+
+fn picker_widget<'a>(
+    picker: &crate::picker::Picker,
+    theme: &crate::theme::Theme,
+    glyphs: &Glyphs,
+) -> Paragraph<'a> {
+    let (visible, highlight) = picker.visible();
+
+    // Padded past the longest label rather than to a guessed width, or a long
+    // one runs straight into its state with no gap — `Ollama (local)ready`.
+    let column = visible
+        .iter()
+        .map(|item| item.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            if picker.filter().is_empty() {
+                "type to filter".to_string()
+            } else {
+                format!("{} {}", glyphs.prompt, picker.filter())
+            },
+            theme.dim(),
+        ),
+    ])];
+    lines.push(Line::default());
+
+    if visible.is_empty() {
+        lines.push(Line::styled("  nothing matches", theme.dim()));
+    }
+
+    for (index, item) in visible.iter().enumerate() {
+        let selected = index == highlight;
+        let marker = if selected { glyphs.edit } else { " " };
+
+        let label_style = if !item.enabled {
+            theme.dim()
+        } else if selected {
+            Style::default().fg(theme.accent).add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.assistant)
+        };
+
+        let mut spans = vec![
+            Span::styled(format!("{marker} "), Style::default().fg(theme.accent)),
+            Span::styled(format!("{:<column$}", item.label), label_style),
+        ];
+        if let Some(state) = &item.state {
+            // The state is why a row is or is not usable, so it earns colour.
+            let style = if item.enabled { theme.dim() } else { theme.label(theme.warning) };
+            spans.push(Span::styled(state.clone(), style));
+        }
+        lines.push(Line::from(spans));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::styled(
+        "  ↑↓ move   enter choose   esc cancel",
+        theme.dim(),
+    ));
+
+    Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.accent))
+            .title(Span::styled(
+                format!(" {} ", picker.title),
+                theme.label(theme.accent),
+            )),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,3 +1103,4 @@ mod tests {
         assert!(popup.height > 0);
     }
 }
+

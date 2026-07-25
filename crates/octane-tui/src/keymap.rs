@@ -44,6 +44,16 @@ pub enum KeyAction {
     CompletionAccept,
     CompletionDismiss,
 
+    /// Move the picker highlight.
+    PickerNext,
+    PickerPrevious,
+    /// Choose the highlighted row.
+    PickerChoose,
+    PickerCancel,
+    /// Narrow the picker.
+    PickerFilter(char),
+    PickerUnfilter,
+
     ScrollUp,
     ScrollDown,
     PageUp,
@@ -74,6 +84,8 @@ pub struct KeyContext<'a> {
     pub on_first_line: bool,
     /// The text ends with a backslash, the portable newline escape hatch.
     pub ends_with_continuation: bool,
+    /// A selection overlay is open.
+    pub picking: bool,
 }
 
 /// Interpret a keypress.
@@ -85,6 +97,22 @@ pub fn route(key: KeyEvent, ctx: &KeyContext<'_>) -> KeyAction {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+
+    // A picker is modal: it owns every key until it is answered. Letting a
+    // keystroke through would act on a composer the user cannot see.
+    if ctx.picking {
+        return match key.code {
+            KeyCode::Up => KeyAction::PickerPrevious,
+            KeyCode::Down => KeyAction::PickerNext,
+            KeyCode::Enter | KeyCode::Tab => KeyAction::PickerChoose,
+            KeyCode::Esc => KeyAction::PickerCancel,
+            KeyCode::Backspace => KeyAction::PickerUnfilter,
+            // Ctrl+C still exits: a modal that traps the user is a bug.
+            KeyCode::Char('c') if ctrl => KeyAction::Exit,
+            KeyCode::Char(ch) if !ctrl => KeyAction::PickerFilter(ch),
+            _ => KeyAction::None,
+        };
+    }
 
     // The popup owns the arrows, tab, and enter while it is open. Anything else
     // falls through, so typing keeps refining the query rather than being eaten.
@@ -207,15 +235,15 @@ mod tests {
     }
 
     fn idle() -> KeyContext<'static> {
-        KeyContext { working: false, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
+        KeyContext { working: false, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false, picking: false }
     }
 
     fn drafting() -> KeyContext<'static> {
-        KeyContext { working: false, composer_empty: false, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
+        KeyContext { working: false, composer_empty: false, approval: None, completing: false, on_first_line: true, ends_with_continuation: false, picking: false }
     }
 
     fn working() -> KeyContext<'static> {
-        KeyContext { working: true, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false }
+        KeyContext { working: true, composer_empty: true, approval: None, completing: false, on_first_line: true, ends_with_continuation: false, picking: false }
     }
 
     fn prompt(diff: Option<&str>) -> ApprovalPrompt {
@@ -234,6 +262,7 @@ mod tests {
             completing: true,
             on_first_line: true,
             ends_with_continuation: false,
+            picking: false,
         }
     }
 
@@ -282,6 +311,48 @@ mod tests {
         // Otherwise a multi-line draft cannot be edited above its last line.
         let later = KeyContext { on_first_line: false, ..drafting() };
         assert_eq!(route(key(KeyCode::Up), &later), KeyAction::MoveUp);
+    }
+
+    fn picking() -> KeyContext<'static> {
+        KeyContext {
+            working: false,
+            composer_empty: true,
+            approval: None,
+            completing: false,
+            on_first_line: true,
+            ends_with_continuation: false,
+            picking: true,
+        }
+    }
+
+    #[test]
+    fn a_picker_owns_every_key_until_answered() {
+        // Letting a keystroke through would act on a composer the user cannot see.
+        let ctx = picking();
+        assert_eq!(route(key(KeyCode::Down), &ctx), KeyAction::PickerNext);
+        assert_eq!(route(key(KeyCode::Up), &ctx), KeyAction::PickerPrevious);
+        assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::PickerChoose);
+        assert_eq!(route(key(KeyCode::Esc), &ctx), KeyAction::PickerCancel);
+        assert_eq!(route(key(KeyCode::Backspace), &ctx), KeyAction::PickerUnfilter);
+    }
+
+    #[test]
+    fn typing_in_a_picker_filters_it() {
+        assert_eq!(route(key(KeyCode::Char('r')), &picking()), KeyAction::PickerFilter('r'));
+    }
+
+    #[test]
+    fn a_picker_does_not_trap_the_user() {
+        // A modal with no way out is a bug, whatever else it does.
+        assert_eq!(route(ctrl('c'), &picking()), KeyAction::Exit);
+    }
+
+    #[test]
+    fn a_picker_suppresses_mode_cycling_and_scrolling() {
+        // Both would change state behind an overlay the user is answering.
+        let ctx = picking();
+        assert_eq!(route(key(KeyCode::BackTab), &ctx), KeyAction::None);
+        assert_eq!(route(key(KeyCode::PageUp), &ctx), KeyAction::None);
     }
 
     #[test]
@@ -374,7 +445,7 @@ mod tests {
     #[test]
     fn approval_shortcuts_settle_the_prompt() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
 
         assert_eq!(
             route(key(KeyCode::Char('y')), &ctx),
@@ -393,7 +464,7 @@ mod tests {
     #[test]
     fn unknown_keys_during_an_approval_start_an_instruction() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
 
         // "use the other file" begins with 'u', which is not a shortcut.
         assert_eq!(route(key(KeyCode::Char('u')), &ctx), KeyAction::Insert('u'));
@@ -402,7 +473,7 @@ mod tests {
     #[test]
     fn once_typing_has_started_shortcut_letters_are_just_letters() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
 
         // The 'n' in "run the other one" must not reject the prompt.
         assert_eq!(route(key(KeyCode::Char('n')), &ctx), KeyAction::Insert('n'));
@@ -412,14 +483,14 @@ mod tests {
     #[test]
     fn enter_with_instructions_rejects_with_them() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: false, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
         assert_eq!(route(key(KeyCode::Enter), &ctx), KeyAction::RejectWithComposerText);
     }
 
     #[test]
     fn enter_on_an_empty_approval_prompt_does_not_guess() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
         assert_eq!(
             route(key(KeyCode::Enter), &ctx),
             KeyAction::None,
@@ -430,11 +501,11 @@ mod tests {
     #[test]
     fn the_diff_shortcut_is_live_only_with_a_diff() {
         let without = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&without), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&without), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
         assert_eq!(route(key(KeyCode::Char('f')), &ctx), KeyAction::Insert('f'));
 
         let with = prompt(Some("+ line"));
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&with), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&with), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
         assert_eq!(
             route(key(KeyCode::Char('f')), &ctx),
             KeyAction::Approve(ApprovalReply::ShowDiff)
@@ -444,7 +515,7 @@ mod tests {
     #[test]
     fn an_approval_blocks_submission_and_mode_cycling() {
         let prompt = prompt(None);
-        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false };
+        let ctx = KeyContext { working: true, composer_empty: true, approval: Some(&prompt), completing: false, on_first_line: true, ends_with_continuation: false, picking: false };
         // Changing mode or sending a prompt mid-approval would be answering a
         // different question than the one on screen.
         assert_eq!(route(key(KeyCode::BackTab), &ctx), KeyAction::None);
