@@ -11,6 +11,30 @@
 //! state renders like any other widget.
 
 
+/// The full logo. 30 columns, 15 rows.
+///
+/// Braille, which is one of the ranges declared width-safe: the whole block is
+/// East Asian Width Neutral, so every cell is one column in every terminal.
+/// It is tall, so [`wordmark`] only returns it when the pane can spare the
+/// rows; the block-capital form below is the fallback, not a lesser variant.
+const LOGO: &[&str] = &[
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⡉⠙⣻⣷⣶⣤⣀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⣼⣿⣿⣿⡿⠋⠀⠀⠀⠀⢹⣿⣿⡟⠉⠉⠉⢻⡿⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠰⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⣿⣿⣇⠀⠀⠀⠈⠇⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⢿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠉⠛⠿⣷⣤⡤⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣿⣿⣿⣿⣿⣶⣦⣤⣤⣀⣀⣀⡀⠉⠀⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⠻⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⡀⠀⠀⠀⠀",
+    "⠀⠀⠀⢀⣀⣤⣄⣀⠀⠀⠀⠀⠀⠀⠀⠉⠉⠙⠛⠿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀",
+    "⠀⠀⣰⣿⣿⣿⣿⣿⣷⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿⣿⣿⣿⣧⠀⠀",
+    "⠀⠀⣿⣿⣿⠁⠀⠈⠙⢿⣿⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⠀⠀",
+    "⠀⠀⢿⣿⣿⣆⠀⠀⠀⠀⠈⠛⠿⣿⣶⣦⡤⠴⠀⠀⠀⠀⠀⣸⣿⣿⣿⡿⠀⠀",
+    "⠀⠀⠈⢿⣿⣿⣷⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⠃⠀⠀",
+    "⠀⠀⠀⠀⠙⢿⣿⣿⣿⣶⣦⣤⣀⣀⡀⠀⠀⠀⣀⣠⣴⣾⣿⣿⣿⡿⠃⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠈⠙⠻⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠋⠀⠀⠀⠀⠀",
+    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠙⠛⠛⠛⠛⠛⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀",
+];
+
 /// Wordmark, block-capital style. 52 columns.
 const WORDMARK: &[&str] = &[
     " ██████╗  ██████╗████████╗ █████╗ ███╗   ██╗███████╗",
@@ -48,15 +72,24 @@ const WORDMARK_ASCII: &[&str] = &[
 /// cell goes through `Terminal::draw`, so a module that writes to stdout — as
 /// the original animated banner did, with cursor-up escapes and a sleep — puts
 /// its output on the primary screen where it is immediately hidden.
-pub fn wordmark(width: u16, ascii: bool) -> &'static [&'static str] {
+pub fn wordmark(width: u16, height: u16, ascii: bool) -> &'static [&'static str] {
     const NARROW: &[&str] = &[WORDMARK_NARROW];
+
+    // Braille has no ASCII equivalent, so a terminal without dependable
+    // Unicode gets the letterforms regardless of how much room it has.
     if ascii {
-        if width >= 40 { WORDMARK_ASCII } else { NARROW }
-    } else if width >= 56 {
-        WORDMARK
-    } else {
-        NARROW
+        return if width >= 40 { WORDMARK_ASCII } else { NARROW };
     }
+
+    // The logo only earns its rows if the hints below it still fit. Its own 15
+    // plus the tagline, six hints and their spacing is a little over 26.
+    if width >= 34 && height >= 27 {
+        return LOGO;
+    }
+    if width >= 56 {
+        return WORDMARK;
+    }
+    NARROW
 }
 
 #[cfg(test)]
@@ -67,7 +100,7 @@ mod tests {
     fn every_wordmark_row_is_the_same_width() {
         // A ragged row shifts the art and, worse, is invisible until someone
         // sees it in a terminal narrower than the one it was written in.
-        for art in [WORDMARK, WORDMARK_ASCII] {
+        for art in [WORDMARK, WORDMARK_ASCII, LOGO] {
             let width = art[0].chars().count();
             for row in art {
                 assert_eq!(row.chars().count(), width, "{row:?}");
@@ -79,14 +112,14 @@ mod tests {
     fn a_narrow_terminal_gets_the_compact_mark() {
         // The full wordmark is 52 columns; wrapping it is worse than not
         // showing it, because a wrapped row reads as corruption.
-        assert_eq!(wordmark(40, false), &[WORDMARK_NARROW]);
-        assert_eq!(wordmark(30, true), &[WORDMARK_NARROW]);
+        assert_eq!(wordmark(40, 20, false), &[WORDMARK_NARROW]);
+        assert_eq!(wordmark(30, 20, true), &[WORDMARK_NARROW]);
     }
 
     #[test]
     fn a_wide_terminal_gets_the_full_wordmark() {
-        assert_eq!(wordmark(100, false), WORDMARK);
-        assert_eq!(wordmark(100, true), WORDMARK_ASCII);
+        assert_eq!(wordmark(100, 20, false), WORDMARK);
+        assert_eq!(wordmark(100, 20, true), WORDMARK_ASCII);
     }
 
     #[test]
@@ -95,6 +128,38 @@ mod tests {
         // characters, which says nothing and looks broken.
         for row in WORDMARK_ASCII {
             assert!(row.is_ascii(), "{row:?}");
+        }
+    }
+
+    #[test]
+    fn the_logo_only_appears_when_its_rows_are_affordable() {
+        // It is 15 rows. Taking them from a short pane pushes the key hints
+        // below it off screen, which is the one thing the empty state is for.
+        assert_eq!(wordmark(100, 40, false), LOGO);
+        assert_ne!(wordmark(100, 24, false), LOGO, "a short pane keeps the hints");
+        assert_ne!(wordmark(30, 40, false), LOGO, "and a narrow one cannot fit it");
+    }
+
+    #[test]
+    fn the_logo_is_never_used_as_an_ascii_fallback() {
+        // Braille has no ASCII equivalent, so a terminal without dependable
+        // Unicode gets letterforms however much room it has.
+        assert_ne!(wordmark(100, 60, true), LOGO);
+    }
+
+    #[test]
+    fn every_logo_cell_is_one_column() {
+        // Braille is East Asian Width Neutral across the whole block, which is
+        // why it is on the safe list. Asserted rather than assumed, because a
+        // double-width cell here would shear the whole picture.
+        for row in LOGO {
+            for ch in row.chars() {
+                assert!(
+                    (0x2800..=0x28ff).contains(&(ch as u32)),
+                    "{ch:?} (U+{:04X}) is outside the braille block",
+                    ch as u32
+                );
+            }
         }
     }
 

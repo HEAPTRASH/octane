@@ -379,7 +379,7 @@ impl App {
                 if !lines.is_empty() {
                     lines.push(ratatui::text::Line::default());
                 }
-                let hints = empty_state_lines(&theme, &glyphs, body.width);
+                let hints = empty_state_lines(&theme, &glyphs, body.width, body.height);
                 lines.extend(hints);
                 frame.render_widget(Paragraph::new(lines), body);
             } else {
@@ -791,6 +791,7 @@ fn empty_state_lines<'a>(
     theme: &crate::theme::Theme,
     glyphs: &Glyphs,
     width: u16,
+    height: u16,
 ) -> Vec<Line<'a>> {
     let hints: &[(&str, &str)] = &[
         ("type a message", "ask octane to do something"),
@@ -806,8 +807,16 @@ fn empty_state_lines<'a>(
     // The wordmark lives here rather than in a pre-session print: under the
     // alternate screen the empty transcript is the only place with room for it,
     // and it disappears on its own once the session has content.
-    for row in crate::banner::wordmark(width, glyphs.rule == crate::glyphs::ASCII.rule) {
-        lines.push(Line::styled(format!("  {row}"), Style::default().fg(theme.accent)));
+    // Centred, because the logo is a picture rather than a line of text and a
+    // left-flush picture reads as misaligned.
+    let art = crate::banner::wordmark(width, height, glyphs.rule == crate::glyphs::ASCII.rule);
+    let art_width = art.iter().map(|row| row.chars().count()).max().unwrap_or(0);
+    let indent = " ".repeat(usize::from(width).saturating_sub(art_width) / 2);
+    for row in art {
+        lines.push(Line::styled(
+            format!("{indent}{row}"),
+            Style::default().fg(theme.accent),
+        ));
     }
 
     lines.push(Line::default());
