@@ -166,12 +166,6 @@ impl Auth {
         }
     }
 
-    /// Whether this can be satisfied without reaching out to a credential
-    /// provider — used to fail fast at load rather than at first request.
-    pub fn is_static(&self) -> bool {
-        matches!(self, Self::None | Self::ApiKey { .. })
-    }
-
     /// Expand `${VAR}` references in whatever this variant carries.
     pub fn resolve_env(self, provider: &str) -> Result<Self, ConfigError> {
         self.resolve_env_with(provider, |name| std::env::var(name).ok())
@@ -872,11 +866,10 @@ mod tests {
         .unwrap();
         assert!(matches!(vertex, Auth::GoogleVertex { ref location, .. } if location == "europe-west4"));
         // Neither can be satisfied from the file alone.
-        assert!(!vertex.is_static());
 
         let bedrock: Auth =
             serde_json::from_str(r#"{ "type": "awsSigV4", "region": "us-east-1" }"#).unwrap();
-        assert!(!bedrock.is_static());
+        assert!(matches!(bedrock, Auth::AwsSigV4 { ref region, .. } if region == "us-east-1"));
     }
 
     #[test]
@@ -894,7 +887,6 @@ mod tests {
         );
         let model = provider.resolve("ollama", "qwen").unwrap();
         assert_eq!(model.auth, Auth::None);
-        assert!(model.auth.is_static());
     }
 
     #[test]

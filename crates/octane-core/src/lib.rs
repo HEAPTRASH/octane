@@ -35,7 +35,7 @@ pub use agent::{Agent, AgentKind};
 pub use events::EventSink;
 pub use model_source::ModelStepSource;
 pub use loop_guard::LoopGuard;
-pub use prompt::PromptAssembler;
+pub use prompt::{BASE_INSTRUCTIONS, PromptAssembler, mode_switch_notice};
 pub use step::{StepDecision, StopReason};
 pub use task::{Delegate, TaskTool};
 pub use turn::{Approver, TurnRunner};

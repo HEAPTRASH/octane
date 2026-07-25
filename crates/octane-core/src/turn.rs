@@ -257,6 +257,19 @@ impl TurnRunner {
                         return self.finish(StopReason::Interrupted, appended, steps);
                     }
 
+                    // A broken harness is not the model's problem, and telling it
+                    // invites a retry of something that cannot succeed. On a
+                    // platform with no sandbox backend *every* `bash` call lands
+                    // here, so reporting it would burn the whole step budget
+                    // rediscovering that the tool is unavailable.
+                    Err(error) if !error.is_reportable_to_model() => {
+                        return self.finish(
+                            StopReason::Failed { message: error.to_string() },
+                            appended,
+                            steps,
+                        );
+                    }
+
                     // Everything else is told to the model as a tool error, which
                     // is usually enough for it to correct itself. A wrong path is a
                     // conversation, not a crash.

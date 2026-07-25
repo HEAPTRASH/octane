@@ -11,7 +11,7 @@ use anyhow::Result;
 use camino::Utf8PathBuf;
 use clap::{Parser, Subcommand};
 use octane_permission::PermissionMode;
-use octane_sandbox::SandboxPolicy;
+use octane_sandbox::{NetworkPolicy, SandboxPolicy};
 
 #[derive(Debug, Parser)]
 #[command(name = "octane", version, about = "An AI coding agent for the terminal")]
@@ -122,11 +122,20 @@ fn main() -> Result<()> {
         octane_config::Settings::load(&octane_config::roots(&workspace));
 
     let sandboxed = !cli.no_sandbox && settings.sandbox.unwrap_or(true);
-    let sandbox = if sandboxed {
+    let mut sandbox = if sandboxed {
         SandboxPolicy::workspace(workspace.clone(), std::env::var("TMPDIR").ok().map(Into::into))
     } else {
         SandboxPolicy::DangerFullAccess
     };
+
+    // Applied after construction because `workspace()` denies the network
+    // unconditionally — the safe default, and the one worth having to opt out
+    // of deliberately rather than passing at every call site.
+    if settings.sandbox_network.unwrap_or(false) {
+        if let SandboxPolicy::WorkspaceWrite { network, .. } = &mut sandbox {
+            *network = NetworkPolicy::Allowed;
+        }
+    }
 
     // `--mode` has a default, so it cannot be distinguished from unset. The
     // settings file wins only when the flag was left at its default.
@@ -147,6 +156,7 @@ fn main() -> Result<()> {
             &sandbox,
             mode,
             cli.model.as_deref().or(settings.model.as_deref()),
+            settings.faster_model.as_deref(),
         ),
         
         Some(Command::Tool { name, input }) => {
@@ -176,6 +186,7 @@ fn doctor(
     sandbox: &SandboxPolicy,
     mode: PermissionMode,
     model: Option<&str>,
+    faster: Option<&str>,
 ) -> Result<()> {
     println!("octane {}", env!("CARGO_PKG_VERSION"));
     println!();
@@ -195,6 +206,18 @@ fn doctor(
             Ok(resolved) => println!("model         {} (default)", resolved.reference),
             Err(_) => println!("model         <none configured>"),
         },
+    }
+    // Reported but not yet used for anything: `Role::Faster` resolves, and no
+    // caller asks for it, because the features that would (compaction, titles)
+    // do not exist. Printed so the setting is at least verifiable rather than
+    // silently inert.
+    if let Some(reference) = faster {
+        match registry.resolve(reference) {
+            Ok(resolved) => {
+                println!("faster        {} (configured, not yet used)", resolved.reference)
+            }
+            Err(error) => println!("faster        {reference}  — {error}"),
+        }
     }
     println!("mode          {}", mode.label());
 
@@ -312,9 +335,9 @@ async fn run_tool(
 async fn interactive(
     workspace: &Utf8PathBuf,
     sandbox: SandboxPolicy,
-    mode: PermissionMode,
+    mut mode: PermissionMode,
     model: Option<&str>,
-    settings: octane_config::Settings,
+    mut settings: octane_config::Settings,
     settings_errors: Vec<octane_config::SettingsError>,
 ) -> Result<()> {
     use octane_protocol::{ItemKind, ToolCallId};
@@ -354,6 +377,33 @@ async fn interactive(
         },
         Err(_) => None,
     };
+    // Assembled once. Skills are deliberately absent: `render_manifest` tells
+    // the model to "load one with the `skill` tool", and no such tool is
+    // registered — advertising it would buy failed calls.
+    let assembler = {
+        let mut assembler = octane_core::PromptAssembler::new(octane_core::BASE_INSTRUCTIONS)
+            .sandbox(describe_sandbox(&sandbox))
+            .environment(format!(
+                "Working directory: {workspace}\nPlatform: {}\nThis is a snapshot taken at session start.",
+                std::env::consts::OS,
+            ));
+        // A project's own instructions outrank nothing and inform everything, so
+        // they ride as a developer message rather than being spliced into the
+        // system prompt where they would break the cached prefix.
+        let user_dir = octane_config::roots(workspace).first().cloned();
+        if let Ok(snapshot) = octane_memory::discover(user_dir.as_deref(), workspace, workspace) {
+            let rendered = snapshot.render();
+            if !rendered.is_empty() {
+                assembler = assembler.memory(rendered);
+            }
+        }
+        assembler
+    };
+
+    // Snapshotted once: the registry is read at startup, so this is exactly the
+    // set of models a `model` setting could name and have work.
+    let model_names: Vec<String> =
+        registry.models().iter().map(|model| model.reference.clone()).collect();
     let mut history: Vec<octane_protocol::Message> = Vec::new();
     // Runtime override for the model's configured default.
     let mut thinking = settings.thinking.unwrap_or_else(|| {
@@ -362,6 +412,9 @@ async fn interactive(
 
     if settings.show_reasoning.unwrap_or(false) {
         app.options_mut().reasoning = octane_tui::render::Reasoning::Shown;
+    }
+    if settings.ascii.unwrap_or(false) {
+        app.options_mut().glyphs = octane_tui::glyphs::ASCII;
     }
 
     // Configuration problems are said once, at the top, rather than surfacing as
@@ -418,10 +471,56 @@ async fn interactive(
                 }
             }
 
+            // Choosing a setting opens the values it can take, rather than
+            // cycling it in place: a four-value setting cycled blind takes
+            // three keystrokes to inspect and one to overshoot.
+            AppEvent::Picked { kind: octane_tui::PickerKind::Setting, key } => {
+                match setting_value_picker(workspace, &settings, &model_names, &key) {
+                    Some(picker) => app.set_picker(picker),
+                    None => app.push_event(&completed_static(ItemKind::Error {
+                        message: format!("{key} is not an editable setting."),
+                    }))?,
+                }
+            }
+
+            AppEvent::Picked { kind: octane_tui::PickerKind::SettingValue(setting), key: value } => {
+                let outcome = apply_setting(
+                    workspace,
+                    &mut settings,
+                    Live {
+                        app: &mut app,
+                        thinking: &mut thinking,
+                        mode: &mut mode,
+                        history: &mut history,
+                    },
+                    &model_names,
+                    &setting,
+                    &value,
+                );
+                match outcome {
+                    Ok(report) => app
+                        .push_event(&completed_static(ItemKind::AgentMessage { text: report }))?,
+                    Err(error) => app.push_event(&completed_static(ItemKind::Error {
+                        message: error.to_string(),
+                    }))?,
+                }
+            }
+
             AppEvent::Picked { .. } => {}
 
             AppEvent::Exit => break,
             AppEvent::Interrupt => {}
+            // The status line is not the permission mode. Before this, cycling
+            // changed the label while the runner kept evaluating the mode it
+            // started with — the dangerous direction being a user who believes
+            // they are in plan mode and is not.
+            AppEvent::ModeChanged(next) if next != mode => {
+                octane_core::PromptAssembler::append_change_notice(
+                    &mut history,
+                    octane_core::mode_switch_notice(mode.label(), next.label()),
+                );
+                mode = next;
+            }
             AppEvent::ModeChanged(_) => {}
 
             AppEvent::Submit(Submission::Command { name, args })
@@ -449,6 +548,7 @@ async fn interactive(
                     mode,
                     thinking,
                     permissions: &settings.permissions,
+                    prompt: &assembler,
                 };
                 run_turn(&mut app, &session_ctx, &mut history).await?;
             }
@@ -470,7 +570,10 @@ async fn interactive(
                         // Tier 2: the body is read only now, on activation.
                         skill_body(workspace, other).unwrap_or_default()
                     }
-                    "settings" => render_settings(workspace),
+                    "settings" => {
+                        app.set_picker(settings_picker(&settings, &model_names));
+                        continue;
+                    }
                     "clear" => {
                         app.clear_transcript();
                         continue;
@@ -542,6 +645,7 @@ async fn interactive(
                     mode,
                     thinking,
                     permissions: &settings.permissions,
+                    prompt: &assembler,
                 };
                 run_turn(&mut app, &session, &mut history).await?;
             }
@@ -725,6 +829,175 @@ fn connect_picker() -> octane_tui::Picker {
     });
 
     octane_tui::Picker::new(PickerKind::Provider, "Connect a provider", items)
+}
+
+/// What the sandbox permits, in a sentence the model can act on.
+///
+/// Worth sending: a model that does not know it is confined reads a denial as a
+/// broken command and "fixes" working code until the step budget runs out.
+fn describe_sandbox(sandbox: &SandboxPolicy) -> String {
+    match sandbox {
+        SandboxPolicy::DangerFullAccess => {
+            "Commands run unconfined. Nothing constrains what they can reach.".into()
+        }
+        SandboxPolicy::ExternalSandbox => {
+            "Commands run inside an external sandbox managed by the host.".into()
+        }
+        SandboxPolicy::ReadOnly { network } => {
+            format!("Commands run read-only; no path is writable. Network is {network:?}.")
+        }
+        SandboxPolicy::WorkspaceWrite { writable_roots, network } => {
+            let roots: Vec<&str> = writable_roots.iter().map(|root| root.path.as_str()).collect();
+            format!(
+                "Commands run confined. Writable: {}. Everything else, including \
+                 `.git/` and `.octane/` inside those roots, is read-only. Network is {network:?}. \
+                 A denial is the sandbox, not a broken command — do not work around it.",
+                roots.join(", "),
+            )
+        }
+    }
+}
+
+/// `/settings` — which setting to change, and what it is worth now.
+///
+/// The rows carry the current values, so the picker is also the display the
+/// old `/settings` printed. Two screens showing the same facts would drift.
+fn settings_picker(settings: &octane_config::Settings, models: &[String]) -> octane_tui::Picker {
+    use octane_tui::{PickerItem, PickerKind};
+
+    let items = octane_config::edit::catalogue(models)
+        .into_iter()
+        .map(|editable| {
+            let (value, configured) = editable.effective(settings);
+            let state = if configured { value } else { format!("{value} (default)") };
+            PickerItem::new(editable.key, editable.label).detail(editable.detail).state(state)
+        })
+        .collect();
+
+    octane_tui::Picker::new(PickerKind::Setting, "Settings", items)
+}
+
+/// The values one setting can take, with the current one marked.
+///
+/// The title names the file the choice will be written to. That is the question
+/// that follows immediately from changing a setting, and answering it anywhere
+/// else means answering it after the write.
+fn setting_value_picker(
+    workspace: &Utf8PathBuf,
+    settings: &octane_config::Settings,
+    models: &[String],
+    key: &str,
+) -> Option<octane_tui::Picker> {
+    use octane_tui::{PickerItem, PickerKind};
+
+    let editable = octane_config::edit::catalogue(models).into_iter().find(|e| e.key == key)?;
+    let (current, configured) = editable.effective(settings);
+
+    let items: Vec<PickerItem> = editable
+        .choices
+        .iter()
+        .map(|choice| {
+            let display = choice.value.display();
+            let mut item = PickerItem::new(&display, &choice.label).detail(&choice.detail);
+            if display == current {
+                item = item.state(if configured { "current" } else { "current (default)" });
+            }
+            item
+        })
+        .collect();
+
+    let target = octane_config::edit::target(&octane_config::roots(workspace), key);
+    Some(octane_tui::Picker::new(
+        PickerKind::SettingValue(key.to_string()),
+        format!("{key} → {target}"),
+        items,
+    ))
+}
+
+/// Write a chosen setting, then make the running session match where it can.
+///
+/// Writing without applying is the failure mode this exists to avoid: a change
+/// that is correct in the file and invisible in the session reads as broken,
+/// and the user's next move is to change it back.
+/// The running session's mutable state, bundled because a setting change may
+/// touch any of it and threading four `&mut`s through every call reads as an
+/// accident waiting to happen.
+struct Live<'a> {
+    app: &'a mut octane_tui::App,
+    thinking: &'a mut octane_provider::Thinking,
+    mode: &'a mut PermissionMode,
+    history: &'a mut Vec<octane_protocol::Message>,
+}
+
+fn apply_setting(
+    workspace: &Utf8PathBuf,
+    settings: &mut octane_config::Settings,
+    live: Live<'_>,
+    models: &[String],
+    key: &str,
+    value: &str,
+) -> Result<String> {
+    let Live { app, thinking, mode, history } = live;
+    use octane_config::edit;
+
+    let editable = edit::catalogue(models)
+        .into_iter()
+        .find(|editable| editable.key == key)
+        .ok_or_else(|| anyhow::anyhow!("{key} is not an editable setting"))?;
+    let choice = editable
+        .choice(value)
+        .ok_or_else(|| anyhow::anyhow!("{value} is not a value {key} can take"))?;
+
+    let roots = octane_config::roots(workspace);
+    let target = edit::target(&roots, key);
+    edit::set(&target, key, &choice.value)?;
+
+    // Reloaded rather than assigned field by field, so what the next picker
+    // shows as current is what the files actually resolve to — layering,
+    // overrides and all.
+    let (reloaded, errors) = octane_config::Settings::load(&roots);
+    *settings = reloaded;
+
+    match key {
+        "mode" => {
+            let next = settings.mode.unwrap_or_default();
+            if next != *mode {
+                octane_core::PromptAssembler::append_change_notice(
+                    history,
+                    octane_core::mode_switch_notice(mode.label(), next.label()),
+                );
+            }
+            // Both, or the label and the engine disagree about what is allowed.
+            *mode = next;
+            app.status_mut().mode = next;
+        }
+        "thinking" => *thinking = settings.thinking.unwrap_or_default(),
+        "show-reasoning" => {
+            app.options_mut().reasoning = if settings.show_reasoning.unwrap_or(false) {
+                octane_tui::render::Reasoning::Shown
+            } else {
+                octane_tui::render::Reasoning::Hidden
+            }
+        }
+        "ascii" => {
+            app.options_mut().glyphs = if settings.ascii.unwrap_or(false) {
+                octane_tui::glyphs::ASCII
+            } else {
+                octane_tui::glyphs::UNICODE
+            }
+        }
+        // Everything else is read once at startup; the message below says so.
+        _ => {}
+    }
+
+    let mut report = format!("`{key}` is now `{value}` in {target}.\n");
+    if editable.applies == octane_config::Applies::OnRestart {
+        report.push_str("\nRestart octane for it to take effect.\n");
+    }
+    for error in &errors {
+        report.push_str(&format!("\n! {error}\n"));
+    }
+    Ok(report)
 }
 
 /// Write a provider file and say what remains.
@@ -1141,6 +1414,10 @@ struct Session<'a> {
     mode: PermissionMode,
     thinking: octane_provider::Thinking,
     permissions: &'a octane_config::settings::Permissions,
+    /// Built once for the session, not per turn. Rebuilding it would re-walk
+    /// the filesystem and could change the prefix mid-session, which is the one
+    /// thing the cache ordering in `PromptAssembler` exists to prevent.
+    prompt: &'a octane_core::PromptAssembler,
 }
 
 async fn run_turn(
@@ -1148,7 +1425,7 @@ async fn run_turn(
     session: &Session<'_>,
     history: &mut Vec<octane_protocol::Message>,
 ) -> Result<()> {
-    let Session { model, workspace, sandbox, mode, thinking, permissions } = *session;
+    let Session { model, workspace, sandbox, mode, thinking, permissions, prompt } = *session;
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
     use octane_protocol::TurnId;
     use octane_tools::ToolRegistry;
@@ -1192,10 +1469,17 @@ async fn run_turn(
     runner.events = sink;
 
     let cancel = runner.cancel.clone();
-    let tools = registry.schemas_where(|_| true);
+    // Plan mode denies every mutating action, so showing the model `write` and
+    // `bash` only buys a tool call that ends the turn. Enforced by omission for
+    // the same reason the subagent path is: a tool it can see is one it tries.
+    // (`is_mutating` is coarser than the policy — it also hides MCP tools plan
+    // mode would permit — which errs toward showing too little, not too much.)
+    let tools = registry.schemas_where(|tool| {
+        mode != PermissionMode::Plan || !tool.is_mutating()
+    });
     let source = ModelStepSource::new(model.clone(), tools).with_thinking(thinking);
 
-    let turn_history = history.clone();
+    let turn_history = prompt.assemble(history, None);
     let workspace_owned = workspace.clone();
     let mut turn = tokio::spawn(async move {
         runner
@@ -1269,8 +1553,7 @@ async fn run_turn(
     }
 
     let used = octane_context::prune::estimate_tokens(history);
-    let window = model.info().effective_context_window().max(1);
-    app.status_mut().context_used = used as f64 / window as f64;
+    app.status_mut().context_used = budget.utilization(used);
 
     Ok(())
 }
@@ -1315,15 +1598,25 @@ impl octane_core::Delegate for SubagentRunner {
         // Filtered to what this agent's definition permits, and filtered by
         // *omission* — a tool the model can see is one it will try, and the
         // refusal it then reasons around is context spent on nothing.
-        let permitted = registry.schemas_where(|tool| agent.permits_tool(tool.name()));
-
         let (policy, _) = build_policy(&self.workspace, &self.policy_permissions);
 
         let mut core_agent = octane_core::Agent::build();
         core_agent.name = agent.name.clone();
         core_agent.allowed_tools =
             agent.frontmatter.tools.iter().map(|tool| tool.to_string()).collect();
+        // Inherited unless the definition overrides it. Subagents must inherit
+        // `accept-edits`: Antigravity found that background agents which do not
+        // silently queue writes for an approval the user never sees.
         core_agent.mode = agent.frontmatter.mode_override.unwrap_or(self.mode);
+
+        // Name filter *and* mode filter. The built-in read-only agents list
+        // their tools explicitly, but a user-defined agent with
+        // `mode-override: plan` and no `tools:` list would otherwise be handed
+        // the mutating set it can never use.
+        let permitted = registry.schemas_where(|tool| {
+            agent.permits_tool(tool.name())
+                && (core_agent.mode != PermissionMode::Plan || !tool.is_mutating())
+        });
 
         let budget = octane_context::Budget::for_model(self.model.info());
         let mut runner = TurnRunner::new(

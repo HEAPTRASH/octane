@@ -28,9 +28,11 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod edit;
 pub mod settings;
 
 pub use agent::{AgentDefinition, AgentScope, discover_agents};
+pub use edit::{Applies, Editable, Value};
 pub use settings::{Settings, SettingsError};
 
 /// Directory name at both scopes.

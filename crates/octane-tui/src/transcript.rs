@@ -62,10 +62,6 @@ impl Transcript {
         self.pending.clear();
     }
 
-    pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
     pub fn len(&self) -> usize {
         self.lines.len() + self.pending.len()
     }
@@ -390,12 +386,13 @@ mod tests {
     fn committing_replaces_the_streaming_region() {
         let mut transcript = Transcript::new();
         transcript.set_pending(vec![Line::raw("partial")]);
-        assert!(transcript.has_pending());
+        assert_eq!(text_of(&transcript.visible(10)), vec!["partial"]);
 
         transcript.clear_pending();
         transcript.push(vec![Line::raw("final")]);
 
-        assert!(!transcript.has_pending());
+        // The streaming region is replaced, not appended to — otherwise every
+        // committed message would appear twice.
         assert_eq!(text_of(&transcript.visible(10)), vec!["final"]);
     }
 

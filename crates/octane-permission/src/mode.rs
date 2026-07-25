@@ -76,14 +76,6 @@ impl PermissionMode {
         }
     }
 
-    /// Whether subagents inherit this mode.
-    ///
-    /// They must, for `accept-edits`: Antigravity found that background agents
-    /// which do not inherit it silently queue writes for approval the user never
-    /// sees. `plan` inherits for the obvious reason.
-    pub fn inherited_by_subagents(self) -> bool {
-        true
-    }
 }
 
 #[cfg(test)]

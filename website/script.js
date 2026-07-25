@@ -1,4 +1,4 @@
-// Interactive Terminal and Features Script for octane website
+// Interactive Terminal and Features Script for octane brutalist website
 
 document.addEventListener('DOMContentLoaded', () => {
   // 1. Tabbed Code Box Switching
@@ -25,12 +25,12 @@ document.addEventListener('DOMContentLoaded', () => {
       if (textToCopy) {
         navigator.clipboard.writeText(textToCopy).then(() => {
           const originalText = btn.textContent;
-          btn.textContent = 'Copied!';
-          btn.style.borderColor = 'var(--acid-green)';
-          btn.style.color = 'var(--acid-green)';
+          btn.textContent = '[COPIED!]';
+          btn.style.backgroundColor = '#ffffff';
+          btn.style.color = '#000000';
           setTimeout(() => {
             btn.textContent = originalText;
-            btn.style.borderColor = '';
+            btn.style.backgroundColor = '';
             btn.style.color = '';
           }, 2000);
         }).catch(err => {
@@ -105,7 +105,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const termInput = document.getElementById('termInput');
   const sendCmdBtn = document.getElementById('sendCmdBtn');
   const clearTermBtn = document.getElementById('clearTermBtn');
-  const chipBtns = document.querySelectorAll('.chip');
+  const chipBtns = document.querySelectorAll('.chip-btn');
 
   function appendTermLine(htmlContent) {
     const line = document.createElement('div');
@@ -129,7 +129,7 @@ document.addEventListener('DOMContentLoaded', () => {
         termBody.innerHTML = '';
         appendTermLine('<span class="acid-text">octane agent v0.1.0</span> — Terminal cleared.');
       } else if (lower === 'help') {
-        appendTermLine('<span class="yellow">Available Commands:</span>');
+        appendTermLine('<span class="yellow">AVAILABLE COMMANDS:</span>');
         appendTermLine('  <span class="cyan">octane doctor</span>     - Check configuration & kernel sandbox status');
         appendTermLine('  <span class="cyan">crates</span>            - List all workspace crates');
         appendTermLine('  <span class="cyan">sandboxtest</span>       - Simulate a blocked kernel write outside sandbox');
@@ -138,12 +138,12 @@ document.addEventListener('DOMContentLoaded', () => {
         appendTermLine('  <span class="cyan">clear</span>             - Clear terminal screen');
       } else if (lower === 'octane doctor' || lower === 'doctor') {
         appendTermLine('<span class="dim">[1/3]</span> Checking configuration resolution...');
-        appendTermLine('<span class="green">✓</span> Mode: hybrid | Sandbox: Seatbelt (macOS kernel active)');
+        appendTermLine('<span class="green">[OK]</span> Mode: hybrid | Sandbox: Seatbelt (macOS kernel active)');
         appendTermLine('<span class="dim">[2/3]</span> Testing tool containment...');
-        appendTermLine('<span class="green">✓</span> Writable roots: [/workspace/octane-agent]');
-        appendTermLine('<span class="green">✓</span> Read-only boundaries: [.git/, .octane/]');
+        appendTermLine('<span class="green">[OK]</span> Writable roots: [/workspace/octane-agent]');
+        appendTermLine('<span class="green">[OK]</span> Read-only boundaries: [.git/, .octane/]');
         appendTermLine('<span class="dim">[3/3]</span> Checking model connectivity...');
-        appendTermLine('<span class="green">✓</span> OpenRouter gateway connected (gemini-3.6-flash / claude-3.7-sonnet)');
+        appendTermLine('<span class="green">[OK]</span> OpenRouter gateway connected (gemini-3.6-flash / claude-3.7-sonnet)');
         appendTermLine('<span class="acid-text">Status: ALL SYSTEMS OK (0 errors, 0 security warnings)</span>');
       } else if (lower === 'crates') {
         appendTermLine('<span class="purple">Workspace Crates (13):</span>');
@@ -162,7 +162,7 @@ document.addEventListener('DOMContentLoaded', () => {
         appendTermLine('  └─ octane-cli          (Clap CLI parser)');
       } else if (lower.includes('sandboxtest')) {
         appendTermLine('<span class="dim">Simulating write attempt to /etc/hosts...</span>');
-        appendTermLine('<span class="danger-red">BLOCKED BY SANDBOX:</span> Permission denied (os error 13)');
+        appendTermLine('<span class="neon-pink">[BLOCKED BY KERNEL SANDBOX]</span> Permission denied (os error 13)');
         appendTermLine('<span class="dim">Kernel sandbox (Seatbelt) prevented write outside declared root.</span>');
       } else if (lower.includes('grep')) {
         appendTermLine('<span class="purple">⚡ [tool:grep]</span> pattern="TODO" glob="**/*.rs"');
@@ -181,7 +181,7 @@ document.addEventListener('DOMContentLoaded', () => {
         appendTermLine('8  license = "MIT"');
       } else {
         appendTermLine(`<span class="acid-text">Agent:</span> Received prompt "<span class="white">${escapeHtml(cmd)}</span>". Processing turn via ReAct loop...`);
-        appendTermLine('<span class="green">✓</span> Execution complete.');
+        appendTermLine('<span class="green">[OK]</span> Execution complete.');
       }
     }, 150);
   }

@@ -8,11 +8,20 @@
 //! elsewhere, so every rule below is testable by calling a method.
 
 /// What a selection is for, so the caller knows what to do with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `SettingValue` carries the setting being edited rather than leaving the
+/// caller to remember it between two picks. A second picker opened from the
+/// first is the one case where the selection alone is ambiguous — `"true"`
+/// means nothing without knowing which switch it was for — and ambient state
+/// that has to stay in step with a modal overlay is state that will not.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerKind {
     Provider,
     Model,
+    /// Choosing which setting to change.
     Setting,
+    /// Choosing the value for the named setting.
+    SettingValue(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,12 +156,6 @@ impl Picker {
         item.enabled.then_some(item.key.as_str())
     }
 
-    /// Why the highlighted item cannot be chosen, if it cannot.
-    pub fn blocked_reason(&self) -> Option<&str> {
-        let matches = self.matches();
-        let item = matches.get(self.selected)?;
-        (!item.enabled).then_some(item.state.as_deref()).flatten()
-    }
 }
 
 #[cfg(test)]
@@ -243,7 +246,6 @@ mod tests {
             ],
         );
         assert_eq!(picker.choose(), None);
-        assert_eq!(picker.blocked_reason(), Some("no credits"));
 
         picker.select_next();
         assert_eq!(picker.choose(), Some("open"));

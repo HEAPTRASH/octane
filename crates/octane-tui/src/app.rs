@@ -299,14 +299,6 @@ impl App {
         self.dirty = true;
     }
 
-    pub fn has_picker(&self) -> bool {
-        self.picker.is_some()
-    }
-
-    pub fn has_pending_approval(&self) -> bool {
-        self.pending_approval.is_some()
-    }
-
     /// Redraw, if anything changed.
     pub fn draw(&mut self) -> Result<()> {
         if !self.dirty {
@@ -677,7 +669,7 @@ impl App {
                     .and_then(|picker| picker.choose().map(ToString::to_string));
                 match chosen {
                     Some(key) => {
-                        let kind = self.picker.as_ref().map(|picker| picker.kind);
+                        let kind = self.picker.as_ref().map(|picker| picker.kind.clone());
                         self.picker = None;
                         kind.map(|kind| AppEvent::Picked { kind, key })
                     }
@@ -778,14 +770,21 @@ fn empty_state<'a>(
         ("shift+tab", "cycle mode"),
     ];
 
-    let mut lines = vec![
-        Line::default(),
-        Line::from(vec![
-            Span::styled(format!("  {}", glyphs.claw_mark()), theme.label(theme.accent)),
-            Span::styled(" an agent that codes in your terminal", theme.dim()),
-        ]),
-        Line::default(),
-    ];
+    let mut lines = vec![Line::default()];
+
+    // The wordmark lives here rather than in a pre-session print: under the
+    // alternate screen the empty transcript is the only place with room for it,
+    // and it disappears on its own once the session has content.
+    for row in crate::banner::wordmark(width, glyphs.rule == crate::glyphs::ASCII.rule) {
+        lines.push(Line::styled(format!("  {row}"), Style::default().fg(theme.accent)));
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled(format!("  {}", glyphs.claw_mark()), theme.label(theme.accent)),
+        Span::styled(" an agent that codes in your terminal", theme.dim()),
+    ]));
+    lines.push(Line::default());
 
     for (key, description) in hints {
         lines.push(Line::from(vec![

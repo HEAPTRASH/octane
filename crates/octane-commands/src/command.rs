@@ -44,23 +44,6 @@ pub struct Command {
 }
 
 impl Command {
-    /// Line for the `/` picker.
-    pub fn picker_entry(&self) -> String {
-        let hint = self
-            .frontmatter
-            .argument_hint
-            .as_deref()
-            .map(|h| format!(" {h}"))
-            .unwrap_or_default();
-        let description = self
-            .frontmatter
-            .description
-            .as_deref()
-            .map(|d| format!(" — {d}"))
-            .unwrap_or_default();
-        format!("/{}{hint}{description}", self.name)
-    }
-
     /// Highest positional placeholder (`$1`, `$2`, …) the template refers to.
     ///
     /// Used to reject an invocation before running any shell substitution, so a
@@ -117,12 +100,4 @@ mod tests {
         assert_eq!(command("cost is $$100").required_positional_count(), 0);
     }
 
-    #[test]
-    fn picker_entry_shows_hint_and_description() {
-        let mut cmd = command("body");
-        cmd.name = "review".into();
-        cmd.frontmatter.argument_hint = Some("<pr>".into());
-        cmd.frontmatter.description = Some("Review a PR".into());
-        assert_eq!(cmd.picker_entry(), "/review <pr> — Review a PR");
-    }
 }

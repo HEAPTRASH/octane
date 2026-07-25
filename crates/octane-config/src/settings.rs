@@ -41,15 +41,9 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_network: Option<bool>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
-
     /// Force the ASCII glyph set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ascii: Option<bool>,
-
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub animation: Option<bool>,
 
     #[serde(default, skip_serializing_if = "Permissions::is_empty")]
     pub permissions: Permissions,
@@ -130,9 +124,7 @@ impl Settings {
             show_reasoning,
             sandbox,
             sandbox_network,
-            theme,
             ascii,
-            animation,
         );
 
         // Rules accumulate rather than replace: a project adding one deny should
@@ -163,9 +155,7 @@ pub const TEMPLATE: &str = r#"# octane settings. Project settings override ~/.oc
 # show-reasoning = false
 # sandbox      = true                 # OS containment for shell commands
 # sandbox-network = false
-# theme        = "octane"
 # ascii        = false                # force the ASCII glyph set
-# animation    = true                 # startup wordmark sweep
 
 # [permissions]
 # allow = ["command(git status)", "command(cargo test)"]

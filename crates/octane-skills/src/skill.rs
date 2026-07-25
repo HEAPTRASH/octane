@@ -78,11 +78,4 @@ impl SkillBody {
         self.content.len().div_ceil(4)
     }
 
-    /// Whether this body exceeds the spec's recommended size.
-    ///
-    /// Advisory only. Worth surfacing as a warning, since an oversized body
-    /// defeats the point of tiering — the material belongs in `references/`.
-    pub fn exceeds_recommended_size(&self) -> bool {
-        self.estimated_tokens() > crate::limits::BODY_TOKENS_RECOMMENDED
-    }
 }

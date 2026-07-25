@@ -22,9 +22,6 @@ pub enum Pressure {
 }
 
 impl Pressure {
-    pub fn needs_action(self) -> bool {
-        matches!(self, Self::ShouldPrune | Self::ShouldCompact | Self::Exceeded)
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -14,7 +14,7 @@ use octane_protocol::Message;
 use crate::api::ApiType;
 use crate::codec::{self, Decoder};
 use crate::config::{Auth, ResolvedModel};
-use crate::model::{LanguageModel, ModelInfo, ModelRequest, ToolSchema};
+use crate::model::{LanguageModel, ModelInfo, ModelRequest};
 use crate::stream::ModelStream;
 use crate::{ProviderError, ProviderId};
 
@@ -246,6 +246,16 @@ pub fn classify_error(status: u16, body: &str) -> ProviderError {
         400 if is_context_overflow(&message) => {
             ProviderError::ContextWindowExceeded { used: 0, limit: 0 }
         }
+        // Several endpoints reason unconditionally and reject the request that
+        // asks them not to. Raw, that reads as an unexplained 400; the user has
+        // no way to connect it to the `/thinking off` they chose.
+        400 | 422 if crate::thinking::is_mandatory_reasoning(&message) => ProviderError::Api {
+            status,
+            message: format!(
+                "{message}\n\nThis endpoint cannot disable reasoning. \
+                 Use `/thinking low` to reduce it instead."
+            ),
+        },
         _ => ProviderError::Api { status, message },
     }
 }
@@ -290,22 +300,6 @@ fn truncate(text: &str, limit: usize) -> String {
 /// Build a [`LanguageModel`] for a resolved configuration.
 pub fn connect(resolved: ResolvedModel) -> Result<Arc<dyn LanguageModel>, ProviderError> {
     Ok(Arc::new(HttpModel::new(resolved)?))
-}
-
-/// A request shaped for a model, for callers that only have messages and tools.
-pub fn request_for(
-    model: &ModelInfo,
-    messages: Vec<Message>,
-    tools: Vec<ToolSchema>,
-) -> ModelRequest {
-    ModelRequest {
-        messages,
-        tools,
-        max_output_tokens: model.max_output_tokens,
-        temperature: None,
-        top_p: None,
-        thinking: crate::thinking::Thinking::default(),
-    }
 }
 
 #[cfg(test)]
