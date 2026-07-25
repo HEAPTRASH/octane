@@ -12,6 +12,7 @@ name = "octane"
 path = "src/main.rs"
 
 [dependencies]
+octane-context.workspace = true
 octane-core.workspace = true
 octane-memory.workspace = true
 octane-permission.workspace = true

@@ -9,6 +9,10 @@
 
 # local secrets and overrides — never committed
 /.env.local
+# this repo's own provider config, which is developer-local.
+# Provider files are designed to be committable (they hold ${VAR}
+# references, not keys) — see examples/providers/ for the format.
+/.octane/
 /OCTANE.local.md
 
 # research cache (Firecrawl scrapes)

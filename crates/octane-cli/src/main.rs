@@ -308,6 +308,22 @@ async fn interactive(
         contained,
     )?;
 
+    // Built once. A failure here is reported and the session continues without
+    // a model, so `/connect` still works.
+    let session: Option<std::sync::Arc<dyn octane_provider::LanguageModel>> = match &selected {
+        Ok(resolved) => match octane_provider::connect(resolved.clone()) {
+            Ok(model) => Some(model),
+            Err(error) => {
+                app.push_event(&completed_static(ItemKind::Error {
+                    message: format!("{}: {error}", resolved.reference),
+                }))?;
+                None
+            }
+        },
+        Err(_) => None,
+    };
+    let mut history: Vec<octane_protocol::Message> = Vec::new();
+
     // Configuration problems are said once, at the top, rather than surfacing as
     // a confusing failure on the first prompt.
     for error in registry.errors() {
@@ -370,10 +386,11 @@ async fn interactive(
             }
 
             AppEvent::Submit(Submission::Prompt { text, file_references }) => {
-                app.push_event(&completed_static(ItemKind::UserMessage { text }))?;
+                app.push_event(&completed_static(ItemKind::UserMessage { text: text.clone() }))?;
 
-                // `@path` attaches the file's contents. Extracting the paths
-                // without reading them made the affordance decorative.
+                // `@path` attaches the file's contents through the `read` tool,
+                // so a reference gets the same limits a model-issued read does.
+                let mut prompt = text.clone();
                 for reference in &file_references {
                     match attach(reference, workspace).await {
                         Ok(attached) => {
@@ -382,9 +399,8 @@ async fn interactive(
                                 name: "read".into(),
                                 input: serde_json::json!({ "path": reference }).to_string(),
                             }))?;
-                            app.push_event(&completed_static(ItemKind::AgentMessage {
-                                text: attached,
-                            }))?;
+                            prompt.push_str("\n\n");
+                            prompt.push_str(&attached);
                         }
                         Err(error) => {
                             app.push_event(&completed_static(ItemKind::Error {
@@ -394,10 +410,19 @@ async fn interactive(
                     }
                 }
 
-                app.push_event(&completed_static(ItemKind::Error {
-                    message: "No model is wired up yet. `!command`, `@path`, and `/help` work."
-                        .into(),
-                }))?;
+                let Some(model) = session.as_ref() else {
+                    app.push_event(&completed_static(ItemKind::Error {
+                        message: "No model is configured. Run `/connect` to set one up.".into(),
+                    }))?;
+                    continue;
+                };
+
+                history.push(octane_protocol::Message::text(
+                    octane_protocol::Role::User,
+                    prompt,
+                ));
+
+                run_turn(&mut app, model, &mut history, workspace, &sandbox, mode).await?;
             }
         }
     }
@@ -678,4 +703,124 @@ fn completed_static(kind: octane_protocol::ItemKind) -> octane_protocol::Event {
         turn_id: TurnId::new(),
         item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
     })
+}
+
+/// Drive one turn, streaming events into the UI as they arrive.
+///
+/// The turn runs on its own task while this loop pumps both the event channel
+/// and the terminal, so the UI keeps repainting and Esc keeps working while the
+/// model is talking. Awaiting the turn directly would freeze the interface for
+/// its whole duration.
+async fn run_turn(
+    app: &mut octane_tui::App,
+    model: &std::sync::Arc<dyn octane_provider::LanguageModel>,
+    history: &mut Vec<octane_protocol::Message>,
+    workspace: &Utf8PathBuf,
+    sandbox: &SandboxPolicy,
+    mode: PermissionMode,
+) -> Result<()> {
+    use octane_core::{EventSink, ModelStepSource, TurnRunner};
+    use octane_permission::{Policy, Scope};
+    use octane_protocol::TurnId;
+    use octane_tools::ToolRegistry;
+    use octane_tui::{Activity, TuiApprover};
+
+    let tracker = std::sync::Arc::new(octane_tools::FileTracker::new());
+    let mut registry = ToolRegistry::new();
+    octane_tools::register_all(&mut registry, tracker, sandbox.clone());
+    let registry = std::sync::Arc::new(registry);
+
+    let (policy, _errors) = Policy::builder()
+        .workspace_root(workspace.as_str())
+        .with_baseline_denies()
+        .ask("command(*)", Scope::User)
+        .build();
+
+    let (approver, mut approvals) = TuiApprover::new();
+    let (sink, mut events) = EventSink::new(TurnId::new());
+
+    let budget = octane_context::Budget::for_model(model.info());
+    let agent = octane_core::Agent::build();
+    let mut runner = TurnRunner::new(agent, policy, registry.clone(), approver, budget);
+    runner.mode = mode;
+    runner.events = sink;
+
+    let cancel = runner.cancel.clone();
+    let tools = registry.schemas_where(|_| true);
+    let source = ModelStepSource::new(model.clone(), tools);
+
+    let turn_history = history.clone();
+    let workspace_owned = workspace.clone();
+    let mut turn = tokio::spawn(async move {
+        runner
+            .run(&source, turn_history, workspace_owned.clone(), workspace_owned)
+            .await
+    });
+
+    app.status_mut().activity = Some(Activity {
+        label: "Thinking".into(),
+        elapsed_secs: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+    });
+
+    let outcome = loop {
+        app.draw()?;
+
+        tokio::select! {
+            // Biased so events and approvals are drained before the terminal is
+            // polled; otherwise a fast stream starves the repaint.
+            biased;
+
+            Some(event) = events.recv() => {
+                if let octane_protocol::Event::Usage(usage) = &event {
+                    if let Some(activity) = app.status_mut().activity.as_mut() {
+                        activity.input_tokens = usage.input_tokens;
+                        activity.output_tokens = usage.output_tokens;
+                    }
+                    app.status_mut().cost_usd += usage.cost;
+                }
+                app.push_event(&event)?;
+            }
+
+            Some((prompt, responder)) = approvals.recv() => {
+                app.set_approval(prompt, responder);
+            }
+
+            finished = &mut turn => {
+                break finished.map_err(|error| anyhow::anyhow!("turn panicked: {error}"))?;
+            }
+
+            // Keeps the UI alive: Esc interrupts, and the spinner animates.
+            // A short timeout rather than a full tick, so polling the terminal
+            // never stalls the stream this loop exists to render.
+            () = tokio::time::sleep(std::time::Duration::from_millis(20)) => {
+                if let Some(octane_tui::AppEvent::Interrupt) =
+                    app.poll_for(std::time::Duration::from_millis(1))?
+                {
+                    cancel.cancel();
+                }
+            }
+        }
+    };
+
+    // Drain whatever was still queued when the turn ended.
+    while let Ok(event) = events.try_recv() {
+        app.push_event(&event)?;
+    }
+
+    app.status_mut().activity = None;
+    history.extend(outcome.messages);
+
+    if !outcome.stop_reason.is_success() {
+        app.push_event(&completed_static(octane_protocol::ItemKind::Error {
+            message: outcome.stop_reason.summary(),
+        }))?;
+    }
+
+    let used = octane_context::prune::estimate_tokens(history);
+    let window = model.info().effective_context_window().max(1);
+    app.status_mut().context_used = used as f64 / window as f64;
+
+    Ok(())
 }

@@ -61,7 +61,15 @@ pub struct StepOutput {
 /// implemented as a script in tests.
 #[async_trait]
 pub trait StepSource: Send + Sync {
-    async fn next_step(&self, messages: &[Message]) -> Result<StepOutput, crate::CoreError>;
+    /// Produce one step, publishing to `sink` as content arrives.
+    ///
+    /// The sink is what makes streaming possible: a source that only returned
+    /// the finished step could not show a token before the step ended.
+    async fn next_step(
+        &self,
+        messages: &[Message],
+        sink: &crate::events::EventSink,
+    ) -> Result<StepOutput, crate::CoreError>;
 }
 
 pub struct TurnRunner {
@@ -73,6 +81,8 @@ pub struct TurnRunner {
     pub budget: Budget,
     pub step_limit: u32,
     pub cancel: CancellationToken,
+    /// Where the loop publishes as it goes.
+    pub events: crate::events::EventSink,
     guard: LoopGuard,
 }
 
@@ -118,6 +128,7 @@ impl TurnRunner {
             budget,
             step_limit: DEFAULT_STEP_LIMIT,
             cancel: CancellationToken::new(),
+            events: crate::events::EventSink::discard(),
             guard: LoopGuard::default(),
         }
     }
@@ -173,7 +184,7 @@ impl TurnRunner {
                 Pressure::Comfortable | Pressure::Warning => {}
             }
 
-            let step = match source.next_step(&history).await {
+            let step = match source.next_step(&history, &self.events).await {
                 Ok(step) => step,
                 Err(error) => {
                     return self.finish(
@@ -223,6 +234,9 @@ impl TurnRunner {
 
                 match self.execute_call(call, &cwd, &workspace).await {
                     Ok(outcome) => {
+                        self.events.item(octane_protocol::ItemKind::AgentMessage {
+                            text: outcome.output.clone(),
+                        });
                         interactions.push((call.name.clone(), call.input.clone(), outcome.output.clone()));
                         result_parts.push(Part::ToolResult(ToolResult {
                             call_id: call.id.clone(),
@@ -248,6 +262,7 @@ impl TurnRunner {
                     // conversation, not a crash.
                     Err(error) => {
                         let text = error.to_string();
+                        self.events.item(octane_protocol::ItemKind::Error { message: text.clone() });
                         interactions.push((call.name.clone(), call.input.clone(), text.clone()));
                         result_parts.push(Part::ToolResult(ToolResult {
                             call_id: call.id.clone(),
@@ -378,7 +393,11 @@ mod tests {
 
     #[async_trait]
     impl StepSource for ScriptedSource {
-        async fn next_step(&self, _messages: &[Message]) -> Result<StepOutput, crate::CoreError> {
+        async fn next_step(
+            &self,
+            _messages: &[Message],
+            _sink: &crate::events::EventSink,
+        ) -> Result<StepOutput, crate::CoreError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             let next = self.steps.lock().expect("scripted source lock").pop_front();
             Ok(next.unwrap_or_else(|| StepOutput {

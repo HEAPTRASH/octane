@@ -27,6 +27,11 @@ pub struct Transcript {
     following: bool,
     /// Height of the last render, for page-sized movement.
     viewport: usize,
+    /// Lines still streaming, rendered after the committed ones.
+    ///
+    /// Held apart rather than appended so a delta can rewrite the in-flight
+    /// text without the committed transcript growing a line per token.
+    pending: Vec<Line<'static>>,
 }
 
 impl Transcript {
@@ -46,16 +51,32 @@ impl Transcript {
         }
     }
 
+    /// Replace the streaming region.
+    pub fn set_pending(&mut self, lines: Vec<Line<'static>>) {
+        self.pending = lines;
+    }
+
+    /// Commit the streaming region, or discard it if the caller has pushed the
+    /// finished form itself.
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     pub fn len(&self) -> usize {
-        self.lines.len()
+        self.lines.len() + self.pending.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.lines.is_empty()
+        self.lines.is_empty() && self.pending.is_empty()
     }
 
     pub fn clear(&mut self) {
         self.lines.clear();
+        self.pending.clear();
         self.scroll = 0;
         self.following = true;
     }
@@ -67,23 +88,35 @@ impl Transcript {
     /// The slice to draw in a viewport of `height` rows.
     ///
     /// Records the height so page movement knows how far a page is.
-    pub fn visible(&mut self, height: usize) -> &[Line<'static>] {
+    /// The slice to draw in a viewport of `height` rows.
+    ///
+    /// Returns owned lines because the streaming region is concatenated on the
+    /// way out; borrowing would require the two to be contiguous, which is
+    /// exactly what keeping them apart avoids.
+    pub fn visible(&mut self, height: usize) -> Vec<Line<'static>> {
         self.viewport = height;
+        let total = self.len();
 
         if self.following {
-            self.scroll = self.lines.len().saturating_sub(height);
+            self.scroll = total.saturating_sub(height);
         } else {
             // A window resize can leave the offset past the end.
             self.scroll = self.scroll.min(self.max_scroll(height));
         }
 
-        let start = self.scroll.min(self.lines.len());
-        let end = (start + height).min(self.lines.len());
-        &self.lines[start..end]
+        let start = self.scroll.min(total);
+        let end = (start + height).min(total);
+
+        (start..end)
+            .map(|index| match self.lines.get(index) {
+                Some(line) => line.clone(),
+                None => self.pending[index - self.lines.len()].clone(),
+            })
+            .collect()
     }
 
     fn max_scroll(&self, height: usize) -> usize {
-        self.lines.len().saturating_sub(height)
+        self.len().saturating_sub(height)
     }
 
     /// Scroll up, which stops following.
@@ -131,7 +164,7 @@ impl Transcript {
 
     /// Whether content extends past the viewport in either direction.
     pub fn overflows(&self) -> bool {
-        self.lines.len() > self.viewport
+        self.len() > self.viewport
     }
 }
 
@@ -161,7 +194,7 @@ mod tests {
     fn short_content_is_shown_whole() {
         let mut transcript = Transcript::new();
         transcript.push(lines(0..3));
-        assert_eq!(text_of(transcript.visible(10)).len(), 3);
+        assert_eq!(text_of(&transcript.visible(10)).len(), 3);
     }
 
     #[test]
@@ -169,7 +202,7 @@ mod tests {
         let mut transcript = Transcript::new();
         transcript.push(lines(0..100));
 
-        let visible = text_of(transcript.visible(5));
+        let visible = text_of(&transcript.visible(5));
         assert_eq!(visible, vec!["line 95", "line 96", "line 97", "line 98", "line 99"]);
     }
 
@@ -180,7 +213,7 @@ mod tests {
         transcript.visible(5);
 
         transcript.push(lines(100..105));
-        let visible = text_of(transcript.visible(5));
+        let visible = text_of(&transcript.visible(5));
         assert_eq!(visible.last().unwrap(), "line 104");
     }
 
@@ -192,12 +225,12 @@ mod tests {
 
         transcript.scroll_up(10);
         assert!(!transcript.is_following());
-        let before = text_of(transcript.visible(5));
+        let before = text_of(&transcript.visible(5));
 
         // The single most annoying thing a log pane can do is move while being
         // read, so new content must not shift the view.
         transcript.push(lines(100..120));
-        assert_eq!(text_of(transcript.visible(5)), before);
+        assert_eq!(text_of(&transcript.visible(5)), before);
     }
 
     #[test]
@@ -213,7 +246,7 @@ mod tests {
         assert!(transcript.is_following(), "reaching the bottom should resume live output");
 
         transcript.push(lines(100..102));
-        assert_eq!(text_of(transcript.visible(5)).last().unwrap(), "line 101");
+        assert_eq!(text_of(&transcript.visible(5)).last().unwrap(), "line 101");
     }
 
     #[test]
@@ -223,10 +256,10 @@ mod tests {
         transcript.visible(5);
 
         transcript.scroll_up(1_000);
-        assert_eq!(text_of(transcript.visible(5))[0], "line 0");
+        assert_eq!(text_of(&transcript.visible(5))[0], "line 0");
 
         transcript.scroll_down(1_000);
-        assert_eq!(text_of(transcript.visible(5)).last().unwrap(), "line 19");
+        assert_eq!(text_of(&transcript.visible(5)).last().unwrap(), "line 19");
     }
 
     #[test]
@@ -236,7 +269,7 @@ mod tests {
         transcript.visible(10);
 
         transcript.page_up();
-        let visible = text_of(transcript.visible(10));
+        let visible = text_of(&transcript.visible(10));
         // 100 lines, viewport 10, bottom offset 90; a page up is 9 lines.
         assert_eq!(visible[0], "line 81");
     }
@@ -248,12 +281,12 @@ mod tests {
         transcript.visible(5);
 
         transcript.scroll_to_top();
-        assert_eq!(text_of(transcript.visible(5))[0], "line 0");
+        assert_eq!(text_of(&transcript.visible(5))[0], "line 0");
         assert!(!transcript.is_following());
 
         transcript.scroll_to_bottom();
         assert!(transcript.is_following());
-        assert_eq!(text_of(transcript.visible(5)).last().unwrap(), "line 99");
+        assert_eq!(text_of(&transcript.visible(5)).last().unwrap(), "line 99");
     }
 
     #[test]
@@ -264,7 +297,7 @@ mod tests {
         transcript.scroll_up(5);
 
         // The user shrinks the terminal; the offset was valid, now it is not.
-        let visible = text_of(transcript.visible(45));
+        let visible = text_of(&transcript.visible(45));
         assert!(!visible.is_empty(), "a resize must not blank the pane");
     }
 
@@ -275,13 +308,13 @@ mod tests {
         transcript.visible(10);
         transcript.scroll_up(100);
 
-        let before = text_of(transcript.visible(10));
+        let before = text_of(&transcript.visible(10));
         transcript.push(lines(0..500));
 
         assert!(transcript.len() <= MAX_LINES);
         // The scroll offset must move with the dropped content, or the pane
         // silently jumps while the user is reading it.
-        assert_eq!(text_of(transcript.visible(10)), before);
+        assert_eq!(text_of(&transcript.visible(10)), before);
     }
 
     #[test]
@@ -307,6 +340,63 @@ mod tests {
 
         transcript.scroll_to_bottom();
         assert_eq!(transcript.progress(), 1.0);
+    }
+
+    #[test]
+    fn streaming_lines_render_after_the_committed_ones() {
+        let mut transcript = Transcript::new();
+        transcript.push(lines(0..3));
+        transcript.set_pending(vec![Line::raw("streaming…")]);
+
+        let visible = text_of(&transcript.visible(10));
+        assert_eq!(visible.last().unwrap(), "streaming…");
+        assert_eq!(visible.len(), 4);
+    }
+
+    #[test]
+    fn a_delta_rewrites_the_streaming_region_rather_than_appending() {
+        // Appending would grow the transcript by a line per token.
+        let mut transcript = Transcript::new();
+        transcript.set_pending(vec![Line::raw("hel")]);
+        transcript.set_pending(vec![Line::raw("hello")]);
+
+        assert_eq!(text_of(&transcript.visible(10)), vec!["hello"]);
+        assert_eq!(transcript.len(), 1);
+    }
+
+    #[test]
+    fn the_view_follows_streaming_content_too() {
+        let mut transcript = Transcript::new();
+        transcript.push(lines(0..100));
+        transcript.visible(5);
+
+        transcript.set_pending(vec![Line::raw("newest")]);
+        assert_eq!(text_of(&transcript.visible(5)).last().unwrap(), "newest");
+    }
+
+    #[test]
+    fn scrolling_up_holds_still_while_content_streams_in() {
+        let mut transcript = Transcript::new();
+        transcript.push(lines(0..100));
+        transcript.visible(5);
+        transcript.scroll_up(20);
+
+        let before = text_of(&transcript.visible(5));
+        transcript.set_pending(vec![Line::raw("streaming")]);
+        assert_eq!(text_of(&transcript.visible(5)), before);
+    }
+
+    #[test]
+    fn committing_replaces_the_streaming_region() {
+        let mut transcript = Transcript::new();
+        transcript.set_pending(vec![Line::raw("partial")]);
+        assert!(transcript.has_pending());
+
+        transcript.clear_pending();
+        transcript.push(vec![Line::raw("final")]);
+
+        assert!(!transcript.has_pending());
+        assert_eq!(text_of(&transcript.visible(10)), vec!["final"]);
     }
 
     #[test]

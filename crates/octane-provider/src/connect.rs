@@ -85,6 +85,13 @@ pub fn recipes() -> Vec<Recipe> {
             note: Some("One key, many models, including models from the providers above."),
         },
         Recipe {
+            key: "nvidia",
+            name: "NVIDIA NIM",
+            credential: Credential::ApiKey { env_var: "NVIDIA_API_KEY" },
+            help_url: "https://build.nvidia.com",
+            note: Some("Free tier, OpenAI-compatible, hosts many open-weight models."),
+        },
+        Recipe {
             key: "groq",
             name: "Groq",
             credential: Credential::ApiKey { env_var: "GROQ_API_KEY" },
@@ -171,6 +178,19 @@ pub fn build_config(recipe: &Recipe) -> ProviderConfig {
                 ("qwen", "qwen/qwen3-coder", "Qwen3 Coder", 262_144, 32_000, false),
             ],
             ("sonnet", "haiku"),
+        ),
+        "nvidia" => (
+            ApiType::OpenAiCompletion,
+            "https://integrate.api.nvidia.com/v1",
+            vec![
+                ("qwen", "qwen/qwen3.5-397b-a17b", "Qwen3.5 397B", 128_000, 16_384, true),
+                ("deepseek", "deepseek-ai/deepseek-v4-pro", "DeepSeek V4 Pro", 128_000, 16_384, true),
+                ("kimi", "moonshotai/kimi-k2.6", "Kimi K2.6", 128_000, 16_384, true),
+                ("gptoss", "openai/gpt-oss-120b", "GPT-OSS 120B", 128_000, 16_384, true),
+                ("nemotron", "nvidia/nemotron-3-super-120b-a12b", "Nemotron 3 Super", 128_000, 16_384, true),
+                ("llama", "meta/llama-3.3-70b-instruct", "Llama 3.3 70B", 128_000, 16_384, false),
+            ],
+            ("qwen", "llama"),
         ),
         "groq" => (
             ApiType::OpenAiCompletion,

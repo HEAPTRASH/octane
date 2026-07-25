@@ -400,3 +400,70 @@ async fn google_requests_go_to_the_templated_url() {
     assert!(request_line.contains("/models/the-model:streamGenerateContent"), "{request_line}");
     assert!(request_line.contains("alt=sse"), "{request_line}");
 }
+
+#[tokio::test]
+async fn deltas_arrive_while_the_response_is_still_being_written() {
+    // The other tests collect the whole stream and then assert, which passes
+    // just as well for an implementation that buffers the entire response and
+    // yields at the end. This one fails in that case: it holds the connection
+    // open after the first delta and requires the client to have surfaced it.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = format!("http://{}", listener.local_addr().unwrap());
+
+    let (released, wait_for_release) = tokio::sync::oneshot::channel::<()>();
+
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0u8; 4096];
+        let _ = socket.read(&mut buffer).await;
+
+        socket
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n",
+            )
+            .await
+            .unwrap();
+        socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{\"content\":\"first\"}}]}\n\n")
+            .await
+            .unwrap();
+        socket.flush().await.unwrap();
+
+        // Nothing more until the client proves it saw the first delta.
+        let _ = wait_for_release.await;
+
+        socket
+            .write_all(b"data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
+            .await
+            .unwrap();
+        let _ = socket.shutdown().await;
+    });
+
+    let model = HttpModel::new(model(ApiType::OpenAiCompletion, address, Auth::None)).unwrap();
+    let mut stream = model.stream(request()).await.unwrap();
+
+    // StepStart, then the first delta — both before the server has sent
+    // anything else, and before the stream has ended.
+    let mut seen = Vec::new();
+    while let Some(event) = stream.next().await {
+        let event = event.unwrap();
+        let is_delta = matches!(event, StreamEvent::TextDelta(_));
+        seen.push(event);
+        if is_delta {
+            break;
+        }
+    }
+
+    assert!(
+        seen.contains(&StreamEvent::TextDelta("first".into())),
+        "a delta must surface before the response completes, got {seen:?}"
+    );
+
+    // Only now let the server finish, proving the read above was not waiting
+    // on the connection closing.
+    released.send(()).unwrap();
+    while let Some(event) = stream.next().await {
+        seen.push(event.unwrap());
+    }
+    assert!(matches!(seen.last(), Some(StreamEvent::StepFinish { .. })));
+}

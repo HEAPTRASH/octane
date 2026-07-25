@@ -97,6 +97,9 @@ pub struct App {
 
     raw_mode: bool,
     dirty: bool,
+    /// The item currently streaming: its id, accumulated text, and whether it is
+    /// reasoning rather than prose.
+    streaming: Option<(octane_protocol::ItemId, String, bool)>,
 }
 
 impl std::fmt::Debug for App {
@@ -155,6 +158,7 @@ impl App {
             sandboxed,
             raw_mode: true,
             dirty: true,
+            streaming: None,
         })
     }
 
@@ -185,13 +189,82 @@ impl App {
         self.files = files;
     }
 
+    /// Apply an agent event.
+    ///
+    /// Streaming items are held in the transcript's pending region and rewritten
+    /// on each delta; only completed items are committed. Appending each delta
+    /// instead would grow the transcript by a line per token.
     pub fn push_event(&mut self, event: &Event) -> Result<()> {
-        let lines = render_event(event, &self.options);
-        if lines.is_empty() {
-            return Ok(());
+        use octane_protocol::ItemEvent;
+
+        match event {
+            Event::Item(ItemEvent::Started { item, .. }) => {
+                self.streaming = Some((item.id.clone(), String::new(), is_reasoning(&item.kind)));
+                self.refresh_pending();
+            }
+            Event::Item(ItemEvent::Delta { item_id, text, .. }) => {
+                if let Some((id, buffer, _)) = self.streaming.as_mut() {
+                    if id == item_id {
+                        buffer.push_str(text);
+                    }
+                }
+                self.refresh_pending();
+            }
+            Event::Item(ItemEvent::Completed { item, .. }) => {
+                // The completed form supersedes whatever was streaming.
+                if self.streaming.as_ref().is_some_and(|(id, _, _)| *id == item.id) {
+                    self.streaming = None;
+                    self.transcript.clear_pending();
+                }
+                let lines = render_event(event, &self.options);
+                if !lines.is_empty() {
+                    self.push_lines(lines);
+                }
+            }
+            _ => {
+                let lines = render_event(event, &self.options);
+                if !lines.is_empty() {
+                    self.push_lines(lines);
+                }
+            }
         }
-        self.push_lines(lines);
+
+        // Reasoning is hidden by default; an item whose kind is filtered out
+        // must not leave a stale pending region behind.
+        if matches!(event, Event::Item(ItemEvent::Started { item, .. }) if is_reasoning(&item.kind))
+            && self.options.reasoning == crate::render::Reasoning::Hidden
+        {
+            self.streaming = None;
+            self.transcript.clear_pending();
+        }
+
+        self.dirty = true;
         Ok(())
+    }
+
+    /// Re-render the streaming region from the accumulated text.
+    fn refresh_pending(&mut self) {
+        let Some((_, text, reasoning)) = &self.streaming else {
+            self.transcript.clear_pending();
+            return;
+        };
+        if *reasoning && self.options.reasoning == crate::render::Reasoning::Hidden {
+            self.transcript.clear_pending();
+            return;
+        }
+
+        let style =
+            if *reasoning { self.options.theme.reasoning() } else { Style::default() };
+        let lines: Vec<Line<'static>> = text
+            .split('\n')
+            .map(|line| {
+                let text = if *reasoning { format!("  {line}") } else { line.to_string() };
+                Line::styled(text, style)
+            })
+            .collect();
+
+        self.transcript.set_pending(lines);
+        self.dirty = true;
     }
 
     pub fn push_lines(&mut self, lines: Vec<Line<'static>>) {
@@ -211,6 +284,7 @@ impl App {
     /// Empty the transcript, returning to the quiet start screen.
     pub fn clear_transcript(&mut self) {
         self.transcript.clear();
+        self.streaming = None;
         self.dirty = true;
     }
 
@@ -269,7 +343,7 @@ impl App {
             if transcript.is_empty() {
                 frame.render_widget(empty_state(&theme, &glyphs, body.width), body);
             } else {
-                let visible = transcript.visible(body.height as usize).to_vec();
+                let visible = transcript.visible(body.height as usize);
                 frame.render_widget(Paragraph::new(visible), body);
             }
 
@@ -334,7 +408,17 @@ impl App {
 
     /// Poll for input. `Ok(None)` means the tick elapsed with nothing to report.
     pub fn poll(&mut self) -> Result<Option<AppEvent>> {
-        if !crossterm::event::poll(TICK)? {
+        self.poll_for(TICK)
+    }
+
+    /// Poll with an explicit timeout.
+    ///
+    /// The idle loop can afford to block for a full tick. A turn in flight
+    /// cannot: this runs inside a `select!` alongside the event channel, and
+    /// blocking the runtime for 80ms at a time would stall the stream it is
+    /// meant to be rendering.
+    pub fn poll_for(&mut self, timeout: Duration) -> Result<Option<AppEvent>> {
+        if !crossterm::event::poll(timeout)? {
             // An idle tick changes nothing, so it must not schedule a repaint.
             // Only an animating spinner does.
             if let Some(activity) = self.status.activity.as_mut() {
@@ -707,6 +791,10 @@ fn approval_height(prompt: &ApprovalPrompt) -> u16 {
         .map(|diff| u16::try_from(diff.lines().count()).unwrap_or(u16::MAX).min(12))
         .unwrap_or(0);
     2 + diff_rows
+}
+
+fn is_reasoning(kind: &octane_protocol::ItemKind) -> bool {
+    matches!(kind, octane_protocol::ItemKind::Reasoning { .. })
 }
 
 #[cfg(test)]

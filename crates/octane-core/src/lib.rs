@@ -23,12 +23,16 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod agent;
+pub mod events;
+pub mod model_source;
 pub mod loop_guard;
 pub mod prompt;
 pub mod step;
 pub mod turn;
 
 pub use agent::{Agent, AgentKind};
+pub use events::EventSink;
+pub use model_source::ModelStepSource;
 pub use loop_guard::LoopGuard;
 pub use prompt::PromptAssembler;
 pub use step::{StepDecision, StopReason};

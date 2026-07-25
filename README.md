@@ -6,7 +6,7 @@ Design notes and the survey the architecture is derived from are in [`RESEARCH.m
 
 ## Status
 
-Early. The subsystems below are implemented and tested. Seven tools work — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment. The TUI runs; model inference is not wired up yet, so `!shell` and `/commands` work end to end but prompts do not.
+Early, but it works end to end. Seven tools — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment, a streaming TUI, and a connected agent loop. Verified against Gemini 3.6 Flash through OpenRouter: prompt → streamed tool call → sandboxed execution → result fed back → answer.
 
 ```
 $ octane doctor                                        # resolved config: sandbox, writable roots, mode
@@ -156,7 +156,7 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 567 tests
+cargo test --workspace       # 585 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

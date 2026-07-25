@@ -50,6 +50,6 @@ pub use completion::{Candidate, Completion};
 pub use composer::{Composer, Submission};
 pub use keymap::{KeyAction, KeyContext};
 pub use glyphs::Glyphs;
-pub use status::StatusLine;
+pub use status::{Activity, StatusLine};
 pub use theme::{ColorDepth, Theme};
 pub use transcript::Transcript;
