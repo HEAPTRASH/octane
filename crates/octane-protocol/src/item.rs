@@ -18,6 +18,21 @@ pub enum ItemKind {
     AgentMessage { text: String },
     Reasoning { text: String },
     ToolExecution { call_id: ToolCallId, name: String, input: String },
+    /// What a tool produced, as the tool describes it.
+    ///
+    /// Carries the summary rather than the output. The full text goes to the
+    /// model in `Part::ToolResult`; a client showing it verbatim buries the
+    /// conversation under file bodies and build logs, and would be printing
+    /// wire framing like `<file path=...>` that exists for the model.
+    ToolResult {
+        call_id: ToolCallId,
+        name: String,
+        /// The tool's own one-line description of what it did.
+        title: String,
+        /// Structured detail: line counts, exit codes, match counts.
+        metadata: Option<serde_json::Value>,
+        is_error: bool,
+    },
     /// A file write the agent wants to make, held for review.
     Diff { path: String, unified: String },
     /// The turn is parked until the client answers.

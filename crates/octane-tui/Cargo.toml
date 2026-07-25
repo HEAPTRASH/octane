@@ -14,6 +14,7 @@ octane-permission.workspace = true
 octane-provider.workspace = true
 async-trait.workspace = true
 crossterm.workspace = true
+unicode-width = "0.2"
 ratatui.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

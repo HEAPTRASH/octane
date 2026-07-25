@@ -97,7 +97,11 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
     let theme = &options.theme;
     let glyphs = &options.glyphs;
 
-    match &item.kind {
+    // Sanitized once, here, rather than in each branch. Every string below is
+    // somebody else's bytes and there is no branch that would be correct to
+    // skip: the model, the tools, `!command` and pastes all land in one of
+    // them.
+    match &sanitized(&item.kind) {
         ItemKind::UserMessage { text } => {
             let mut lines = vec![Line::from(vec![
                 Span::styled(format!("{} ", glyphs.prompt), theme.label(theme.user)),
@@ -147,6 +151,30 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
                     lines.push(Line::styled(format!("    {line}"), theme.dim()));
                 }
             }
+            lines
+        }
+
+        ItemKind::ToolResult { name, title, metadata, is_error, .. } => {
+            // Indented under the call it answers, so the pairing is structural
+            // rather than a matter of colour. The marker differs on failure for
+            // the same reason: a red line is invisible to a reader who cannot
+            // see red, and to anyone under NO_COLOR.
+            let (marker, colour) = if *is_error {
+                (glyphs.error, theme.error)
+            } else {
+                (glyphs.notice, theme.tool)
+            };
+
+            let mut spans = vec![
+                Span::styled(format!("  {marker} "), Style::default().fg(colour)),
+                Span::styled(title.clone(), theme.dim()),
+            ];
+            if let Some(detail) = summarize_result(name, metadata.as_ref()) {
+                spans.push(Span::styled(format!("  {detail}"), theme.dim()));
+            }
+
+            let mut lines = vec![Line::from(spans)];
+            lines.push(Line::default());
             lines
         }
 
@@ -203,6 +231,137 @@ pub fn render_diff(unified: &str, theme: &Theme) -> Vec<Line<'static>> {
 ///
 /// Reaches into the arguments per tool because a generic JSON dump is unreadable
 /// at a glance, and the point of the collapsed line is to be readable at a glance.
+/// A short, human-facing account of what a tool produced.
+///
+/// Reads the metadata the tool already reports rather than measuring its
+/// output, because the output is not shown and the tool knows better than the
+/// renderer what mattered about it.
+pub fn summarize_result(tool: &str, metadata: Option<&serde_json::Value>) -> Option<String> {
+    let metadata = metadata?;
+    let number = |key: &str| metadata.get(key).and_then(|value| value.as_u64());
+
+    match tool {
+        "read" => match (number("lines_shown"), number("lines_total")) {
+            (Some(shown), Some(total)) if shown < total => {
+                Some(format!("{shown} of {total} lines"))
+            }
+            (_, Some(total)) => Some(format!("{total} lines")),
+            _ => None,
+        },
+        "bash" => {
+            let code = number("exit_code")?;
+            // Stated even when zero: "did that command actually work?" is the
+            // question a collapsed line has to answer on its own.
+            Some(if code == 0 { "exit 0".into() } else { format!("exit {code}") })
+        }
+        "write" | "edit" => number("lines").map(|lines| format!("{lines} lines")),
+        _ => None,
+    }
+}
+
+/// Apply [`sanitize`] to every user-visible string in an item.
+///
+/// Cloning the item is the price of doing this in one place instead of at a
+/// dozen call sites where the next branch added would forget.
+fn sanitized(kind: &ItemKind) -> ItemKind {
+    let mut kind = kind.clone();
+    match &mut kind {
+        ItemKind::UserMessage { text }
+        | ItemKind::AgentMessage { text }
+        | ItemKind::Reasoning { text } => *text = sanitize(text),
+        ItemKind::Error { message } => *message = sanitize(message),
+        ItemKind::ToolExecution { input, .. } => *input = sanitize(input),
+        ItemKind::ToolResult { title, .. } => *title = sanitize(title),
+        ItemKind::Diff { unified, path } => {
+            *unified = sanitize(unified);
+            *path = sanitize(path);
+        }
+        ItemKind::Approval(request) => request.summary = sanitize(&request.summary),
+    }
+    kind
+}
+
+/// Tab stop, in columns. The usual terminal default.
+const TAB_WIDTH: usize = 8;
+
+/// Make arbitrary text safe to put in a `Line`.
+///
+/// Everything in the transcript is somebody else's bytes: tool output, shell
+/// output, model text, pastes. Two things go wrong if they arrive raw, and
+/// neither is obvious from reading ratatui's API.
+///
+/// `Paragraph` filters graphemes by *display width*, not by control-ness. An
+/// ESC measures zero and is dropped, so `\x1b[39m` loses only the ESC and the
+/// remaining `[39m` is written into cells as ordinary text. That is where a
+/// stray `39m` in a transcript comes from, and why stripping at the tool is not
+/// enough: escapes also arrive from the model and from `!command`.
+///
+/// A tab measures zero too, so it vanishes rather than aligning anything. Line
+/// numbers separated from their content by a tab collapse into the content.
+/// Expanding here rather than at the source keeps every producer free to use
+/// tabs normally.
+///
+/// Note `Buffer::set_stringn` *does* filter control characters, so block titles
+/// were never affected. Only the transcript, which is the one place untrusted
+/// bytes land.
+pub fn sanitize(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut column = 0usize;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\u{1b}' => {
+                // CSI and OSC run to a terminator; anything else is a short
+                // sequence whose second byte is consumed here.
+                match chars.next() {
+                    Some('[') => {
+                        for next in chars.by_ref() {
+                            if ('\u{40}'..='\u{7e}').contains(&next) {
+                                break;
+                            }
+                        }
+                    }
+                    Some(']') => {
+                        for next in chars.by_ref() {
+                            if next == '\u{7}' || next == '\u{1b}' {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            '\t' => {
+                let spaces = TAB_WIDTH - (column % TAB_WIDTH);
+                out.extend(std::iter::repeat_n(' ', spaces));
+                column += spaces;
+            }
+            '\n' => {
+                out.push('\n');
+                column = 0;
+            }
+            // A bare carriage return rewrites the line it is on, which is how
+            // progress bars work. Keeping the text after it is what the user
+            // would have seen.
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    continue;
+                }
+                let start = out.rfind('\n').map(|index| index + 1).unwrap_or(0);
+                out.truncate(start);
+                column = 0;
+            }
+            _ if ch.is_control() => {}
+            _ => {
+                out.push(ch);
+                column += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            }
+        }
+    }
+    out
+}
+
 pub fn summarize_input(tool: &str, input: &str) -> String {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(input) else {
         return truncate(input, 60);
@@ -454,5 +613,92 @@ mod tests {
         assert_eq!(thousands(999), "999");
         assert_eq!(thousands(1_000), "1,000");
         assert_eq!(thousands(167_000), "167,000");
+    }
+
+    #[test]
+    fn an_ansi_escape_cannot_reach_the_transcript() {
+        // ratatui filters graphemes by display width, not by control-ness. An
+        // ESC measures zero and is dropped, so `\x1b[31m` loses only the ESC
+        // and `[31m` is written into cells as ordinary text.
+        let event = completed(ItemKind::AgentMessage {
+            text: "\u{1b}[31mRED\u{1b}[0m plain".into(),
+        });
+        let rendered = text_of(&render(&event));
+
+        assert!(rendered.contains("RED plain"));
+        assert!(!rendered.contains("31m"), "escape body leaked: {rendered:?}");
+        assert!(!rendered.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn a_tab_becomes_spaces_before_it_reaches_a_cell() {
+        // A tab measures zero too, so it vanishes rather than aligning. Line
+        // numbers separated from their content by one collapse into it.
+        let event = completed(ItemKind::UserMessage { text: "62\tlast line".into() });
+        let rendered = text_of(&render(&event));
+
+        assert!(!rendered.contains('\t'));
+        assert!(rendered.contains("62      last line"), "got {rendered:?}");
+    }
+
+    #[test]
+    fn a_progress_bar_shows_only_what_it_settled_on() {
+        // A bare carriage return rewrites its line, which is how progress bars
+        // work. Keeping every intermediate state would show the user something
+        // they never saw.
+        let event = completed(ItemKind::AgentMessage { text: "10%\r50%\r100%".into() });
+        let rendered = text_of(&render(&event));
+
+        assert!(rendered.contains("100%"));
+        assert!(!rendered.contains("10%"), "superseded output leaked: {rendered:?}");
+    }
+
+    #[test]
+    fn a_tool_result_shows_its_summary_not_its_output() {
+        // The whole point: `output` goes to the model and costs tokens, while
+        // `title` and `metadata` go to the UI. Publishing the output put file
+        // bodies and build logs in the transcript under the agent's own voice.
+        let event = completed(ItemKind::ToolResult {
+            call_id: octane_protocol::ToolCallId::new(),
+            name: "read".into(),
+            title: "flake.nix".into(),
+            metadata: Some(serde_json::json!({ "lines_total": 62, "lines_shown": 62 })),
+            is_error: false,
+        });
+        let rendered = text_of(&render(&event));
+
+        assert!(rendered.contains("flake.nix"));
+        assert!(rendered.contains("62 lines"));
+        assert!(!rendered.contains("<file"), "wire framing must not be shown");
+    }
+
+    #[test]
+    fn a_failed_tool_is_marked_without_relying_on_colour() {
+        // A red line is invisible under NO_COLOR and to a reader who cannot
+        // see red, so the marker glyph has to carry it too.
+        let failed = completed(ItemKind::ToolResult {
+            call_id: octane_protocol::ToolCallId::new(),
+            name: "bash".into(),
+            title: "run the tests".into(),
+            metadata: Some(serde_json::json!({ "exit_code": 101 })),
+            is_error: true,
+        });
+        let ok = completed(ItemKind::ToolResult {
+            call_id: octane_protocol::ToolCallId::new(),
+            name: "bash".into(),
+            title: "run the tests".into(),
+            metadata: Some(serde_json::json!({ "exit_code": 0 })),
+            is_error: false,
+        });
+
+        let failed = text_of(&render(&failed));
+        let ok = text_of(&render(&ok));
+
+        assert_ne!(
+            failed.trim_start().chars().next(),
+            ok.trim_start().chars().next(),
+            "the marker must differ, not only the colour"
+        );
+        assert!(failed.contains("exit 101"), "and the words must say so: {failed:?}");
     }
 }

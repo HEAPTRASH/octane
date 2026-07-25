@@ -396,8 +396,17 @@ impl TurnRunner {
 
                 match self.execute_call(call, &cwd, &workspace).await {
                     Ok(outcome) => {
-                        self.events.item(octane_protocol::ItemKind::AgentMessage {
-                            text: outcome.output.clone(),
+                        // The summary, not the output. Publishing the output
+                        // put whole file bodies and build logs in the
+                        // transcript under the agent's own voice, including the
+                        // `<file path=...>` framing that exists for the model.
+                        // The model still gets all of it, below.
+                        self.events.item(octane_protocol::ItemKind::ToolResult {
+                            call_id: call.id.clone(),
+                            name: call.name.clone(),
+                            title: outcome.title.clone(),
+                            metadata: outcome.metadata.clone(),
+                            is_error: false,
                         });
                         interactions.push((call.name.clone(), call.input.clone(), outcome.output.clone()));
                         result_parts.push(Part::ToolResult(ToolResult {

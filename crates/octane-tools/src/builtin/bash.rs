@@ -235,11 +235,11 @@ impl Tool for BashTool {
                 "{}\n\nThis looks like the sandbox blocking the command rather than the \
                  command itself failing. Writable paths are limited to the workspace and \
                  network access is off.",
-                truncate(&combined).trim_end()
+                truncate(&strip_ansi(&combined)).trim_end()
             )));
         }
 
-        let body = truncate(&combined);
+        let body = truncate(&strip_ansi(&combined));
         let output = match exit_code {
             Some(0) if body.trim().is_empty() => "(no output)".to_string(),
             Some(0) => body.clone(),
@@ -253,6 +253,41 @@ impl Tool for BashTool {
             "sandboxed": self.sandbox.is_contained(),
         })))
     }
+}
+
+/// Strip ANSI escape sequences from command output.
+///
+/// Applied here rather than only at display time so the model does not pay for
+/// them either: a coloured `cargo` or `git diff` is a large run of escape bytes
+/// that carry no meaning once the text is in a prompt. Anything that genuinely
+/// wants colour is going to a terminal, and this is not one.
+fn strip_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\u{1b}' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('[') => {
+                for next in chars.by_ref() {
+                    if ('\u{40}'..='\u{7e}').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            Some(']') => {
+                for next in chars.by_ref() {
+                    if next == '\u{7}' || next == '\u{1b}' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Cap output, keeping the head and the tail.
