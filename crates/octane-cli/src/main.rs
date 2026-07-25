@@ -366,6 +366,8 @@ async fn interactive(
                     "help" => HELP.to_string(),
                     "models" => render_models(workspace),
                     "connect" => render_connect_list(),
+                    "agents" => render_agents(workspace),
+                    "settings" => render_settings(workspace),
                     "clear" => {
                         app.clear_transcript();
                         continue;
@@ -446,6 +448,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/models", "list configured models"),
     ("/connect", "set up a provider"),
     ("/thinking", "show or set reasoning: off, low, medium, high"),
+    ("/agents", "list available agents"),
+    ("/settings", "show resolved settings"),
     ("/clear", "clear the transcript"),
     ("/exit", "quit octane"),
 ];
@@ -713,6 +717,92 @@ fn completed_static(kind: octane_protocol::ItemKind) -> octane_protocol::Event {
         turn_id: TurnId::new(),
         item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
     })
+}
+
+/// `/agents` — what can be delegated to, and where each came from.
+fn render_agents(workspace: &Utf8PathBuf) -> String {
+    let (agents, errors) = octane_config::discover_agents(&octane_config::roots(workspace));
+
+    let mut out = String::new();
+    for error in &errors {
+        out.push_str(&format!("  ! {error}\n"));
+    }
+    if !errors.is_empty() {
+        out.push('\n');
+    }
+
+    // Sorted by mode before name, or the headers below repeat: printing one on
+    // every change through an alphabetical list alternates primary/subagent.
+    let mut offered: Vec<_> = agents.iter().filter(|agent| agent.is_offered()).collect();
+    offered.sort_by_key(|agent| {
+        (
+            match agent.frontmatter.mode {
+                octane_config::agent::AgentMode::Primary => 0,
+                _ => 1,
+            },
+            agent.name.clone(),
+        )
+    });
+
+    let mut last_mode = None;
+    for agent in offered {
+        let mode = agent.frontmatter.mode;
+        if last_mode != Some(mode) {
+            out.push_str(&format!(
+                "\n{}\n",
+                match mode {
+                    octane_config::agent::AgentMode::Primary => "primary",
+                    _ => "subagents",
+                }
+            ));
+            last_mode = Some(mode);
+        }
+        out.push_str(&format!(
+            "  {:<10} {:<10} {}\n",
+            agent.name,
+            agent.scope.label(),
+            agent.frontmatter.description
+        ));
+    }
+
+    out.push_str("\n  Define your own in .octane/agents/<name>.md\n");
+    out
+}
+
+/// `/settings` — the resolved configuration, and where to change it.
+fn render_settings(workspace: &Utf8PathBuf) -> String {
+    let roots = octane_config::roots(workspace);
+    let (settings, errors) = octane_config::Settings::load(&roots);
+
+    let mut out = String::new();
+    for error in &errors {
+        out.push_str(&format!("  ! {error}\n"));
+    }
+    if !errors.is_empty() {
+        out.push('\n');
+    }
+
+    let rendered = settings.to_toml();
+    if rendered.trim().is_empty() {
+        out.push_str("Nothing configured; every setting is at its default.\n");
+    } else {
+        out.push_str("Resolved settings\n\n");
+        for line in rendered.lines() {
+            out.push_str(&format!("  {line}\n"));
+        }
+        out.push('\n');
+    }
+
+    out.push_str("Files, later overriding earlier\n\n");
+    for root in &roots {
+        let path = root.join(octane_config::settings::SETTINGS_FILE);
+        out.push_str(&format!(
+            "  {:<52} {}\n",
+            path,
+            if path.is_file() { "present" } else { "absent" }
+        ));
+    }
+    out
 }
 
 /// `/thinking` — with no argument, toggle whether reasoning is shown; with one,

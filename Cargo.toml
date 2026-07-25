@@ -12,6 +12,7 @@ repository = "https://github.com/raymond/octane-agent"
 [workspace.dependencies]
 # internal
 octane-commands = { path = "crates/octane-commands" }
+octane-config = { path = "crates/octane-config" }
 octane-context = { path = "crates/octane-context" }
 octane-core = { path = "crates/octane-core" }
 octane-mcp = { path = "crates/octane-mcp" }
