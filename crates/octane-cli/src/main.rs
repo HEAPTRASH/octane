@@ -575,6 +575,11 @@ async fn interactive(
                         continue;
                     }
                     "clear" => {
+                        // The conversation, not just the screen. Clearing only
+                        // the transcript looks identical and leaves every token
+                        // still in the prompt, so a user reaching for it under
+                        // context pressure gets a blank pane and the same bill.
+                        history.clear();
                         app.clear_transcript();
                         continue;
                     }
@@ -665,7 +670,7 @@ const COMMANDS: &[(&str, &str)] = &[
     ("/cs", "search the codebase with parallel research agents"),
     ("/agents", "list available agents"),
     ("/settings", "show resolved settings"),
-    ("/clear", "clear the transcript"),
+    ("/clear", "start over: clear the conversation and the screen"),
     ("/exit", "quit octane"),
 ];
 

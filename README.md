@@ -304,7 +304,8 @@ Written and tested, but not reachable from the binary:
   MCP tools, but nothing spawns a server and the crate is not in the
   binary's dependency tree.
 - Compaction. Pruning runs; compaction does not. Past roughly 80% of the
-  window a session fails and `/clear` is the only recourse.
+  window a session fails and the only recourse is `/clear`, which starts
+  over, or restarting.
 - Skills reaching the model. `/name` prints a skill body into the
   transcript, and the tier-1 manifest is not in the system prompt.
 - File-based slash commands. `octane-commands` discovers and expands
