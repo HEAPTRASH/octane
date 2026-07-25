@@ -3,66 +3,48 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OCTANE.RS /// BRUTALIST AI CODING AGENT FOR TERMINAL</title>
-  <meta name="description" content="A blazing fast, kernel-sandboxed AI coding agent for the terminal, built in Rust with a streaming TUI, multi-provider model support, and strict OS containment.">
+  <title>OCTANE.RS /// AI Coding Agent for Terminal</title>
+  <meta name="description" content="A fast, kernel-sandboxed AI coding agent for the terminal built in Rust.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&family=Inter:wght@400;700;800;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- Brutalist Ticker Marquee Header -->
-  <div class="marquee-ticker">
-    <div class="marquee-track">
-      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 683+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
-      <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT (SEATBELT/LANDLOCK) /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING /// 683+ TESTS PASSED /// ZERO DEBT /// ZERO FLICKER ///</span>
-    </div>
+  <!-- Top Ticker Bar -->
+  <div class="ticker-bar">
+    <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING ⚡</span>
   </div>
 
-  <!-- Navigation Bar -->
+  <!-- Navigation -->
   <header class="navbar">
     <div class="container nav-container">
       <a href="#" class="brand-logo">
         <span class="logo-box">⚡</span>
         <span class="logo-text">OCTANE<span class="logo-dot">.RS</span></span>
-        <span class="version-tag">v0.1.0</span>
       </a>
 
-      <nav class="nav-links" id="navLinks">
+      <nav class="nav-links">
         <a href="#features">FEATURES</a>
-        <a href="#comparison">VS OTHERS</a>
-        <a href="#architecture">CRATES</a>
-        <a href="#demo">LIVE TERMINAL</a>
-        <a href="#providers">PROVIDERS</a>
         <a href="#quickstart">QUICKSTART</a>
-      </nav>
-
-      <div class="nav-actions">
-        <a href="https://github.com/raymond/octane-agent" class="btn btn-secondary" target="_blank" rel="noopener">
-          <svg class="github-icon" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <a href="https://github.com/raymond/octane-agent" target="_blank" rel="noopener" class="btn btn-secondary">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
             <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
           </svg>
           <span>GITHUB</span>
         </a>
-        <a href="#quickstart" class="btn btn-primary">INSTALL NOW</a>
-        <button class="mobile-toggle" id="mobileToggle" aria-label="Toggle navigation">
-          <span></span>
-          <span></span>
-          <span></span>
-        </button>
-      </div>
+      </nav>
     </div>
   </header>
 
   <!-- Hero Section -->
   <section class="hero-section">
     <div class="container hero-container">
-      <div class="hero-badge-container">
-        <span class="brutalist-badge badge-acid">SYSTEM: ACTIVE</span>
-        <span class="brutalist-badge">RUST 2024</span>
-        <span class="brutalist-badge">KERNEL CONTAINED</span>
-        <span class="brutalist-badge badge-cyan">ZERO FLICKER TUI</span>
+      <div class="badge-row">
+        <span class="badge badge-acid">RUST 2024</span>
+        <span class="badge">KERNEL SANDBOXED</span>
+        <span class="badge badge-cyan">ZERO-FLICKER TUI</span>
       </div>
 
       <h1 class="hero-title">
@@ -71,441 +53,85 @@
       </h1>
 
       <p class="hero-subtitle">
-        High-performance, kernel-sandboxed AI agent built in Rust. Harness real OS containment with Seatbelt/Landlock, zero-flicker TUI rendering, multi-provider routing, and deterministic ReAct loops.
+        Fast, kernel-sandboxed AI coding agent built in Rust. Features native OS containment (Seatbelt / Landlock), zero-flicker synchronized TUI, multi-provider LLM routing, and deterministic tool execution.
       </p>
 
-      <!-- Quick Install Command Block -->
+      <!-- Quick Install Box -->
       <div class="quick-install-box">
-        <div class="install-prompt-symbol">$</div>
-        <code id="heroInstallCmd" class="install-cmd-text">cargo install octane-cli</code>
-        <button class="copy-btn copy-install" data-copy="cargo install octane-cli" title="Copy to clipboard">
-          [COPY]
-        </button>
+        <span class="prompt">$</span>
+        <code>cargo install octane-cli</code>
+        <button class="copy-btn" data-copy="cargo install octane-cli">[COPY]</button>
       </div>
 
-      <div class="hero-cta-group">
-        <a href="#quickstart" class="btn btn-primary btn-lg">⚡ INSTALL & RUN</a>
-        <a href="#demo" class="btn btn-outline btn-lg">▶ SIMULATOR TUI</a>
-      </div>
-
-      <!-- Hero Terminal Visual Block -->
-      <div class="terminal-box hero-terminal">
+      <!-- Terminal Preview -->
+      <div class="terminal-box">
         <div class="terminal-bar">
-          <div class="terminal-buttons">
-            <span class="term-sq red"></span>
-            <span class="term-sq yellow"></span>
-            <span class="term-sq green"></span>
+          <div class="term-dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
           </div>
-          <div class="terminal-title-text">octane — v0.1.0 (release)</div>
-          <div class="terminal-status-tag">[SANDBOX: SEATBELT ACTIVE]</div>
+          <div class="term-title">octane doctor</div>
         </div>
-
-        <div class="terminal-body-content" id="heroTerminalBody">
-          <div class="term-line ascii-banner">
-  ██████╗  ██████╗████████╗██████╗ ███╗   ██╗███████╗
- ██╔═══██╗██╔════╝╚══██╔══╝██╔══██╗████╗  ██║██╔════╝
- ██║   ██║██║        ██║   ██████╔╝██╔██╗ ██║█████╗  
- ██║   ██║██║        ██║   ██╔══██╗██║╚██╗██║██╔══╝  
- ╚██████╔╝╚██████╗   ██║   ██║  ██║██║ ╚████║███████╗
-  ╚═════╝  ╚═════╝   ╚═╝   ╚═╝  ╚═╝╚═╝  ╚═══╝╚══════╝
-          </div>
-          <div class="term-line"><span class="dim">System:</span> Resolved configuration [sandbox=seatbelt, mode=hybrid, status=ready]</div>
-          <div class="term-line"><span class="prompt-sym">❯</span> <span class="cyan">octane doctor</span></div>
-          <div class="term-line"><span class="green">[OK]</span> Containment: macOS Seatbelt rules initialized</div>
-          <div class="term-line"><span class="green">[OK]</span> Tools registered: read, write, edit, bash, glob, grep, list, task</div>
-          <div class="term-line"><span class="green">[OK]</span> Model connected: openrouter/claude-3.7-sonnet</div>
-          <br>
-          <div class="term-line"><span class="prompt-sym">❯</span> <span class="white">Analyze workspace layout and test suite status...</span></div>
-          <div class="term-line"><span class="purple">⚡ [tool:grep]</span> pattern="TODO" mode="count" glob="**/*.rs"</div>
-          <div class="term-line output-line">├─ crates/octane-core: 0 matches</div>
-          <div class="term-line output-line">├─ crates/octane-sandbox: 0 matches</div>
-          <div class="term-line output-line">└─ 683 tests passed in 1.42s (0 warnings)</div>
-          <div class="term-line"><span class="acid-text">Agent:</span> All 13 workspace crates are clean. Kernel sandbox is strictly enforcing read-only boundaries on <span class="yellow">.git/</span> and <span class="yellow">.octane/</span>.</div>
+        <div class="terminal-body">
+          <div class="term-line"><span class="prompt">❯</span> <span class="cyan">octane doctor</span></div>
+          <div class="term-line"><span class="green">[OK]</span> Containment: macOS Seatbelt active</div>
+          <div class="term-line"><span class="green">[OK]</span> Tools: read, write, edit, bash, glob, grep, list, task</div>
+          <div class="term-line"><span class="green">[OK]</span> Model: openrouter/claude-3.7-sonnet</div>
+          <div class="term-line"><span class="dim">Status: All systems operational</span></div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Key Metrics / Brutalist Stats Grid -->
-  <section class="stats-section">
-    <div class="container">
-      <div class="stats-grid">
-        <div class="stat-box">
-          <div class="stat-header">CRATES</div>
-          <div class="stat-num acid-text">13</div>
-          <div class="stat-title">MODULAR ARCHITECTURE</div>
-          <div class="stat-desc">Strict Acyclic Hierarchy</div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-header">TEST SUITE</div>
-          <div class="stat-num white-text">683</div>
-          <div class="stat-title">BEHAVIORAL TESTS</div>
-          <div class="stat-desc">100% Rust 2024 Safety</div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-header">TUI WIRE OVERHEAD</div>
-          <div class="stat-num acid-text">0 KB/s</div>
-          <div class="stat-title">IDLE REPAINTS</div>
-          <div class="stat-desc">Synchronized Output Mode</div>
-        </div>
-        <div class="stat-box">
-          <div class="stat-header">SECURITY</div>
-          <div class="stat-num cyan-text">100%</div>
-          <div class="stat-title">KERNEL CONTAINMENT</div>
-          <div class="stat-desc">Seatbelt / Landlock / AppContainer</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Core Features Grid -->
+  <!-- Features Grid -->
   <section id="features" class="section">
     <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[ENGINEERED FOR SPEED & SECURITY]</div>
-        <h2 class="section-heading">BUILT DIFFERENT FROM GROUND UP</h2>
-        <p class="section-subtext">Strict security boundaries, high frame-rate responsiveness, and zero domain coupling.</p>
+      <div class="section-header">
+        <h2>ENGINEERED FOR SPEED & SECURITY</h2>
+        <p>Built from the ground up in Rust with zero domain logic coupling.</p>
       </div>
 
       <div class="features-grid">
-        <!-- Feature 1 -->
-        <div class="feature-box">
-          <div class="box-tag">01 /// OS KERNEL</div>
-          <h3>POLICY + KERNEL CONTAINMENT</h3>
-          <p>
-            Two separate safety layers: <code>octane-permission</code> checks policy <em>before</em> running, while <code>octane-sandbox</code> enforces Seatbelt / Landlock / AppContainer rules at the OS kernel level.
-          </p>
-          <ul class="brutalist-list">
-            <li>Read-only enforcement on <code>.git/</code> &amp; <code>.octane/</code></li>
-            <li>Zero parameter interpolation — zero shell injection risk</li>
-            <li>Strict Precedence: <code>Deny &gt; Ask &gt; Allow</code></li>
-          </ul>
+        <div class="feature-card">
+          <div class="feature-tag">01 /// OS CONTAINMENT</div>
+          <h3>Kernel Sandboxing</h3>
+          <p>Enforces process boundaries at the OS level using Seatbelt (macOS) and Landlock (Linux). Read-only protections on <code>.git/</code> and <code>.octane/</code>.</p>
         </div>
 
-        <!-- Feature 2 -->
-        <div class="feature-box box-highlight">
-          <div class="box-tag acid">02 /// TUI ENGINE</div>
-          <h3>SYNCHRONIZED STREAMING TUI</h3>
-          <p>
-            Full-screen Ratatui output wrapped in synchronized-output escapes (<code>CSI ?2026h/l</code>). Zero flickering, 0-byte idle repaints, and pure state-in/lines-out rendering.
-          </p>
-          <ul class="brutalist-list">
-            <li>Smart follow-tail auto-scrolling</li>
-            <li>Subsequence path/command completion</li>
-            <li>Width-safe ASCII &amp; Unicode fallback styling</li>
-          </ul>
+        <div class="feature-card highlight">
+          <div class="feature-tag acid">02 /// TUI ENGINE</div>
+          <h3>Synchronized Streaming TUI</h3>
+          <p>Ratatui full-screen interface using synchronized output mode (<code>CSI ?2026h/l</code>) for 100% flicker-free rendering and zero-byte idle repaints.</p>
         </div>
 
-        <!-- Feature 3 -->
-        <div class="feature-box">
-          <div class="box-tag">03 /// GATEWAY</div>
-          <h3>UNIVERSAL PROVIDER ROUTER</h3>
-          <p>
-            Per-model <code>api</code> and <code>baseUrl</code> configuration. Bridge OpenAI, Anthropic, Google Gemini, Vertex, and SigV4 gateways seamlessly from one profile.
-          </p>
-          <ul class="brutalist-list">
-            <li>Env variable substitution with trace logs</li>
-            <li>Auth: API keys, Google Vertex, AWS SigV4, TokenFile</li>
-            <li>Full support for OpenRouter &amp; enterprise proxies</li>
-          </ul>
+        <div class="feature-card">
+          <div class="feature-tag">03 /// GATEWAY ROUTING</div>
+          <h3>Multi-Provider LLM Gateway</h3>
+          <p>Bridge OpenAI, Anthropic, Google Gemini, OpenRouter, Vertex, and AWS SigV4 gateways with granular per-model route configuration.</p>
         </div>
 
-        <!-- Feature 4 -->
-        <div class="feature-box">
-          <div class="box-tag">04 /// MCP &amp; TOOLS</div>
-          <h3>8 BUILT-IN SAFE TOOLS + MCP</h3>
-          <p>
-            Ships with <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, <code>glob</code>, <code>grep</code>, <code>list</code>, and subagent delegation via <code>task</code>. Fully protocol-compliant with Model Context Protocol (MCP) over JSON-RPC.
-          </p>
-          <ul class="brutalist-list">
-            <li>Glob search sorted by mtime for instant relevance</li>
-            <li>Deterministic BTreeMap schema serialization</li>
-            <li>Loop detection hashing <code>(tool, input, output)</code></li>
-          </ul>
-        </div>
-
-        <!-- Feature 5 -->
-        <div class="feature-box">
-          <div class="box-tag">05 /// CONTEXT</div>
-          <h3>CONTEXT &amp; MEMORY LAYERING</h3>
-          <p>
-            Hierarchical <code>OCTANE.md</code> &amp; <code>AGENTS.md</code> memory loading with <code>@import</code> support, automatic token budget pruning, and context compaction thresholds.
-          </p>
-          <ul class="brutalist-list">
-            <li>Progressive skill discovery</li>
-            <li>Append-only prompt history (never mutates past turns)</li>
-            <li>Safety rail step caps and loop detection</li>
-          </ul>
-        </div>
-
-        <!-- Feature 6 -->
-        <div class="feature-box">
-          <div class="box-tag">06 /// ARCHITECTURE</div>
-          <h3>PURE RUST 2024 ARCHITECTURE</h3>
-          <p>
-            Strictly acyclic crate hierarchy. Zero domain logic in <code>octane-core</code> — every collaborator is a trait, making the agent loop fully mockable and testable without a network.
-          </p>
-          <ul class="brutalist-list">
-            <li>Nix Flake integrated toolchain</li>
-            <li>Forbid unsafe code across workspace</li>
-            <li>683 unit, integration, and security tests</li>
-          </ul>
+        <div class="feature-card">
+          <div class="feature-tag">04 /// TOOLING & MCP</div>
+          <h3>8 Safe Tools + MCP</h3>
+          <p>Built-in <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, code search (<code>grep</code>, <code>glob</code>, <code>list</code>), and subagents (<code>task</code>), plus standard MCP support.</p>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Comparison Matrix Section -->
-  <section id="comparison" class="section dark-bg">
-    <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[COMPETITIVE MATRIX]</div>
-        <h2 class="section-heading">WHY OCTANE.RS?</h2>
-        <p class="section-subtext">Comparing terminal AI agents across performance, security, and rendering guarantees.</p>
-      </div>
-
-      <div class="table-wrapper">
-        <table class="brutalist-table">
-          <thead>
-            <tr>
-              <th>CAPABILITY / FEATURE</th>
-              <th class="highlight-header">⚡ OCTANE.RS</th>
-              <th>TRADITIONAL NODE/PYTHON CLIS</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td class="row-title">Kernel-Level Containment</td>
-              <td class="highlight-cell status-ok">[PASS] Seatbelt / Landlock / AppContainer</td>
-              <td class="status-fail">[FAIL] Prompt software checks only</td>
-            </tr>
-            <tr>
-              <td class="row-title">TUI Rendering Engine</td>
-              <td class="highlight-cell status-ok">[PASS] Synchronized Escapes (Ratatui)</td>
-              <td class="status-fail">[FAIL] Flickering ANSI line repaints</td>
-            </tr>
-            <tr>
-              <td class="row-title">Idle Wire Traffic</td>
-              <td class="highlight-cell status-ok">[PASS] 0 KB/s (Pure event-driven)</td>
-              <td class="status-fail">[FAIL] Continuous polling loops</td>
-            </tr>
-            <tr>
-              <td class="row-title">Crate Coupling</td>
-              <td class="highlight-cell status-ok">[PASS] 13 Acyclic Isolated Crates</td>
-              <td class="status-fail">[FAIL] Monolithic script package</td>
-            </tr>
-            <tr>
-              <td class="row-title">Safety Precedence</td>
-              <td class="highlight-cell status-ok">[PASS] Strict Deny &gt; Ask &gt; Allow</td>
-              <td class="status-fail">[FAIL] Ambiguous override ordering</td>
-            </tr>
-            <tr>
-              <td class="row-title">Provider Gateways</td>
-              <td class="highlight-cell status-ok">[PASS] OpenAI, Anthropic, Vertex, SigV4, MCP</td>
-              <td class="status-fail">[FAIL] Vendor lock-in</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </section>
-
-  <!-- Interactive Terminal Simulator Section -->
-  <section id="demo" class="section">
-    <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[INTERACTIVE SIMULATOR]</div>
-        <h2 class="section-heading">TEST COMMANDS LIVE</h2>
-        <p class="section-subtext">Simulate interactive tool calls, command completion, and doctor checks in your browser.</p>
-      </div>
-
-      <div class="simulator-wrapper">
-        <div class="terminal-box full-width">
-          <div class="terminal-bar">
-            <div class="terminal-buttons">
-              <span class="term-sq red"></span>
-              <span class="term-sq yellow"></span>
-              <span class="term-sq green"></span>
-            </div>
-            <div class="terminal-title-text">octane simulator terminal /// interactive</div>
-            <button class="term-action-btn" id="clearTermBtn">[CLEAR]</button>
-          </div>
-
-          <div class="terminal-body-content" id="interactiveTermBody">
-            <div class="term-line"><span class="acid-text">octane agent v0.1.0</span> — Type <span class="yellow">'help'</span> or click preset commands below.</div>
-            <div class="term-line dim">Workspace: /workspace/octane-agent | Sandbox: Seatbelt (macOS)</div>
-            <br>
-          </div>
-
-          <div class="terminal-input-row">
-            <span class="prompt-sym">❯</span>
-            <input type="text" id="termInput" placeholder="Type command (e.g. octane doctor, grep, read, crates, help)..." autocomplete="off" spellcheck="false">
-            <button class="btn btn-primary btn-sm" id="sendCmdBtn">RUN</button>
-          </div>
-        </div>
-
-        <!-- Quick Command Chips -->
-        <div class="preset-chips-row">
-          <span class="preset-label">TRY PRESETS:</span>
-          <button class="chip-btn" data-cmd="octane doctor">octane doctor</button>
-          <button class="chip-btn" data-cmd="crates">crates</button>
-          <button class="chip-btn" data-cmd="octane tool grep 'pattern=TODO'">grep TODO</button>
-          <button class="chip-btn" data-cmd="octane tool read 'path=Cargo.toml'">read Cargo.toml</button>
-          <button class="chip-btn" data-cmd="sandboxtest">test sandbox limit</button>
-          <button class="chip-btn" data-cmd="clear">clear</button>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Workspace Crates Architecture Section -->
-  <section id="architecture" class="section dark-bg">
-    <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[WORKSPACE LAYOUT]</div>
-        <h2 class="section-heading">13 SPECIALIZED RUST CRATES</h2>
-        <p class="section-subtext">Strict one-way dependency graph ensuring clean separation of concerns.</p>
-      </div>
-
-      <div class="architecture-grid">
-        <div class="crate-selector-grid">
-          <div class="crate-card active" data-crate="sandbox">
-            <div class="crate-type">OS KERNEL</div>
-            <h4>octane-sandbox</h4>
-            <p>OS enforcement via Seatbelt / Landlock / AppContainer boundaries.</p>
-          </div>
-
-          <div class="crate-card" data-crate="permission">
-            <div class="crate-type">POLICY ENGINE</div>
-            <h4>octane-permission</h4>
-            <p>Action policy decision engine: Allow, Ask, or Deny rules.</p>
-          </div>
-
-          <div class="crate-card" data-crate="tools">
-            <div class="crate-type">TOOL EXECUTION</div>
-            <h4>octane-tools</h4>
-            <p>Built-in tools: read, write, edit, bash, glob, grep, list.</p>
-          </div>
-
-          <div class="crate-card" data-crate="provider">
-            <div class="crate-type">LLM ROUTER</div>
-            <h4>octane-provider</h4>
-            <p>LanguageModel trait, normalized stream events, and provider transforms.</p>
-          </div>
-
-          <div class="crate-card" data-crate="protocol">
-            <div class="crate-type">SHARED PROTOCOL</div>
-            <h4>octane-protocol</h4>
-            <p>Defines Thread, Turn, Item, Message, Part, and Event wire formats.</p>
-          </div>
-
-          <div class="crate-card" data-crate="core">
-            <div class="crate-type">REACT LOOP</div>
-            <h4>octane-core</h4>
-            <p>Agent coordination, ReAct loop, stop conditions, and prompt assembly.</p>
-          </div>
-        </div>
-
-        <div class="crate-inspector-box" id="crateDetailBox">
-          <div class="inspector-header">
-            <span class="inspector-tag">[CRATE INSPECTOR]</span>
-            <h3 id="crateDetailTitle">octane-sandbox</h3>
-          </div>
-          <div class="inspector-body">
-            <p id="crateDetailDesc">
-              Enforces real OS containment utilizing native kernel features (macOS Seatbelt, Linux Landlock, Windows AppContainer). Ensures processes spawning tool tasks cannot touch files outside declared workspace roots or write to <code>.git/</code> hooks.
-            </p>
-            <div class="code-preview-box">
-              <div class="code-preview-label">// OWNERSHIP BOUNDARY</div>
-              <pre><code id="crateDetailCode">OWNS: Seatbelt / Landlock / AppContainer containment
-DOES NOT OWN: User consent decisions (handled by octane-permission)</code></pre>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Provider Config Section -->
-  <section id="providers" class="section">
-    <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[GATEWAY ROUTING]</div>
-        <h2 class="section-heading">PROVIDER CONFIGURATION</h2>
-        <p class="section-subtext">Supports OpenRouter, Anthropic, OpenAI, Google Gemini, and custom corporate LLM proxies.</p>
-      </div>
-
-      <div class="brutalist-tab-box">
-        <div class="tab-bar">
-          <button class="tab-btn active" data-tab="json">.octane/providers/openrouter.json</button>
-          <button class="tab-btn" data-tab="cli">CLI Commands</button>
-          <button class="tab-btn" data-tab="anthropic">Custom Gateway Profile</button>
-        </div>
-
-        <div class="tab-content active" id="tab-json">
-          <pre><code>{
-  <span class="json-key">"api"</span>: <span class="json-str">"openai-completion"</span>,
-  <span class="json-key">"baseUrl"</span>: <span class="json-str">"https://openrouter.ai/api/v1"</span>,
-  <span class="json-key">"auth"</span>: { <span class="json-key">"type"</span>: <span class="json-str">"apiKey"</span>, <span class="json-key">"value"</span>: <span class="json-str">"${OPENROUTER_API_KEY}"</span> },
-  <span class="json-key">"defaults"</span>: { <span class="json-key">"primary"</span>: <span class="json-str">"claude-3.7"</span>, <span class="json-key">"faster"</span>: <span class="json-str">"flash"</span> },
-  <span class="json-key">"models"</span>: {
-    <span class="json-key">"claude-3.7"</span>: { <span class="json-key">"id"</span>: <span class="json-str">"anthropic/claude-3.7-sonnet"</span> },
-    <span class="json-key">"flash"</span>:      { <span class="json-key">"id"</span>: <span class="json-str">"google/gemini-2.0-flash-001"</span> }
-  }
-}</code></pre>
-        </div>
-
-        <div class="tab-content" id="tab-cli">
-          <pre><code><span class="comment"># Connect to a provider &amp; list available models</span>
-$ octane connect openrouter
-
-<span class="comment"># Check configured model status and api keys</span>
-$ octane models
-
-<span class="comment"># Run interactive TUI session with specific model</span>
-$ octane --model openrouter/claude-3.7</code></pre>
-        </div>
-
-        <div class="tab-content" id="tab-anthropic">
-          <pre><code>{
-  <span class="json-key">"api"</span>: <span class="json-str">"anthropic"</span>,
-  <span class="json-key">"baseUrl"</span>: <span class="json-str">"https://gateway.corp/anthropic/v1"</span>,
-  <span class="json-key">"auth"</span>: {
-    <span class="json-key">"type"</span>: <span class="json-str">"apiKey"</span>,
-    <span class="json-key">"value"</span>: <span class="json-str">"${CORP_ANTHROPIC_TOKEN}"</span>,
-    <span class="json-key">"header"</span>: <span class="json-str">"x-api-key"</span>,
-    <span class="json-key">"prefix"</span>: <span class="json-str">""</span>
-  },
-  <span class="json-key">"models"</span>: {
-    <span class="json-key">"claude"</span>: { <span class="json-key">"id"</span>: <span class="json-str">"claude-3-7-sonnet-20250219"</span> }
-  }
-}</code></pre>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Quickstart & Installation -->
+  <!-- Quickstart Section -->
   <section id="quickstart" class="section dark-bg">
     <div class="container">
-      <div class="section-title-block">
-        <div class="section-tag">[INSTALLATION]</div>
-        <h2 class="section-heading">UP &amp; RUNNING IN SECONDS</h2>
-        <p class="section-subtext">Zero external runtime dependencies. Powered by Nix Flake &amp; Cargo.</p>
+      <div class="section-header">
+        <h2>GETTING STARTED</h2>
+        <p>Run octane in seconds with Cargo or Nix Flakes.</p>
       </div>
 
-      <!-- Installation Switcher -->
-      <div class="install-switcher">
-        <button class="install-tab active" data-install="cargo">CARGO (RUST)</button>
-        <button class="install-tab" data-install="nix">NIX FLAKE</button>
-        <button class="install-tab" data-install="source">FROM SOURCE</button>
-      </div>
-
-      <div class="steps-grid" id="install-cargo-grid">
+      <div class="steps-grid">
         <div class="step-card">
           <div class="step-num">01</div>
-          <h3>INSTALL OCTANE CLI</h3>
-          <p>Install directly using Cargo from source repository or crates.io.</p>
+          <h3>INSTALL CLI</h3>
           <div class="code-box">
             <code>cargo install octane-cli</code>
             <button class="copy-btn" data-copy="cargo install octane-cli">[COPY]</button>
@@ -515,7 +141,6 @@ $ octane --model openrouter/claude-3.7</code></pre>
         <div class="step-card">
           <div class="step-num">02</div>
           <h3>VERIFY SETUP</h3>
-          <p>Run diagnostic checks and verify tool execution without spending tokens.</p>
           <div class="code-box">
             <code>octane doctor</code>
             <button class="copy-btn" data-copy="octane doctor">[COPY]</button>
@@ -524,78 +149,10 @@ $ octane --model openrouter/claude-3.7</code></pre>
 
         <div class="step-card">
           <div class="step-num">03</div>
-          <h3>LAUNCH TUI</h3>
-          <p>Start an interactive session with full OS containment and live streaming.</p>
+          <h3>LAUNCH AGENT</h3>
           <div class="code-box">
             <code>octane</code>
             <button class="copy-btn" data-copy="octane">[COPY]</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="steps-grid" id="install-nix-grid" style="display: none;">
-        <div class="step-card">
-          <div class="step-num">01</div>
-          <h3>CLONE &amp; DIRENV</h3>
-          <p>The Nix flake owns the Rust 2024 toolchain — no rustup management needed.</p>
-          <div class="code-box">
-            <code>git clone https://github.com/raymond/octane-agent
-cd octane-agent
-direnv allow</code>
-            <button class="copy-btn" data-copy="git clone https://github.com/raymond/octane-agent &amp;&amp; cd octane-agent &amp;&amp; direnv allow">[COPY]</button>
-          </div>
-        </div>
-
-        <div class="step-card">
-          <div class="step-num">02</div>
-          <h3>RUN VIA FLAKE</h3>
-          <p>Run octane agent immediately without installing local system packages.</p>
-          <div class="code-box">
-            <code>nix run github:raymond/octane-agent -- doctor</code>
-            <button class="copy-btn" data-copy="nix run github:raymond/octane-agent -- doctor">[COPY]</button>
-          </div>
-        </div>
-
-        <div class="step-card">
-          <div class="step-num">03</div>
-          <h3>LAUNCH SESSION</h3>
-          <p>Enter a sandboxed shell environment with all dependencies auto-loaded.</p>
-          <div class="code-box">
-            <code>nix develop</code>
-            <button class="copy-btn" data-copy="nix develop">[COPY]</button>
-          </div>
-        </div>
-      </div>
-
-      <div class="steps-grid" id="install-source-grid" style="display: none;">
-        <div class="step-card">
-          <div class="step-num">01</div>
-          <h3>CLONE REPO</h3>
-          <p>Clone the official workspace repository with 13 modular crates.</p>
-          <div class="code-box">
-            <code>git clone https://github.com/raymond/octane-agent
-cd octane-agent</code>
-            <button class="copy-btn" data-copy="git clone https://github.com/raymond/octane-agent &amp;&amp; cd octane-agent">[COPY]</button>
-          </div>
-        </div>
-
-        <div class="step-card">
-          <div class="step-num">02</div>
-          <h3>TEST SUITE</h3>
-          <p>Verify all 683 unit, integration, and security assertion tests pass.</p>
-          <div class="code-box">
-            <code>cargo test --workspace</code>
-            <button class="copy-btn" data-copy="cargo test --workspace">[COPY]</button>
-          </div>
-        </div>
-
-        <div class="step-card">
-          <div class="step-num">03</div>
-          <h3>BUILD RELEASE</h3>
-          <p>Compile optimized release binary for your platform.</p>
-          <div class="code-box">
-            <code>cargo run --release -p octane-cli</code>
-            <button class="copy-btn" data-copy="cargo run --release -p octane-cli">[COPY]</button>
           </div>
         </div>
       </div>
@@ -610,32 +167,10 @@ cd octane-agent</code>
           <span class="logo-box">⚡</span>
           <span class="logo-text">OCTANE<span class="logo-dot">.RS</span></span>
         </a>
-        <p class="footer-tagline">AN AI CODING AGENT FOR THE TERMINAL, IN RUST.</p>
-        <div class="status-box">
-          <span class="status-indicator"></span> SYSTEM OPERATIONAL /// RUST 2024
-        </div>
+        <p>Terminal-native AI coding agent, written in Rust.</p>
       </div>
-
-      <div class="footer-links">
-        <div class="link-group">
-          <h5>NAVIGATION</h5>
-          <a href="#features">FEATURES</a>
-          <a href="#comparison">COMPARISON</a>
-          <a href="#architecture">CRATE LAYOUT</a>
-          <a href="#providers">PROVIDERS</a>
-        </div>
-        <div class="link-group">
-          <h5>PROJECT</h5>
-          <a href="https://github.com/raymond/octane-agent" target="_blank" rel="noopener">GITHUB REPO</a>
-          <a href="https://github.com/raymond/octane-agent/blob/main/RESEARCH.md" target="_blank" rel="noopener">RESEARCH SURVEY</a>
-        </div>
-      </div>
-    </div>
-
-    <div class="footer-bottom container">
-      <p>© 2025 OCTANE-AGENT. RELEASED UNDER MIT LICENSE.</p>
       <div class="footer-meta">
-        <span class="acid-text">ACID GREEN `#95D600` NEO-BRUTALIST THEME</span>
+        <p>© 2025 OCTANE-AGENT /// MIT LICENSE</p>
       </div>
     </div>
   </footer>

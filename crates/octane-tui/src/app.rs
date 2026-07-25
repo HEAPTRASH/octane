@@ -98,6 +98,9 @@ pub struct App {
     sandboxed: bool,
 
     raw_mode: bool,
+    /// True once the session has a real exchange, as opposed to startup
+    /// notices. Guidance stays on screen until then.
+    conversing: bool,
     dirty: bool,
     /// The item currently streaming: its id, accumulated text, and whether it is
     /// reasoning rather than prose.
@@ -161,6 +164,7 @@ impl App {
             workspace,
             sandboxed,
             raw_mode: true,
+            conversing: false,
             dirty: true,
             streaming: None,
             picker: None,
@@ -201,6 +205,18 @@ impl App {
     /// instead would grow the transcript by a line per token.
     pub fn push_event(&mut self, event: &Event) -> Result<()> {
         use octane_protocol::ItemEvent;
+
+        // An error is a notice, not a conversation. Everything else that
+        // reaches the transcript means work has started and the guidance has
+        // served its purpose.
+        if let Event::Item(
+            ItemEvent::Started { item, .. } | ItemEvent::Completed { item, .. },
+        ) = event
+        {
+            if !matches!(item.kind, octane_protocol::ItemKind::Error { .. }) {
+                self.conversing = true;
+            }
+        }
 
         match event {
             Event::Item(ItemEvent::Started { item, .. }) => {
@@ -290,6 +306,7 @@ impl App {
     pub fn clear_transcript(&mut self) {
         self.transcript.clear();
         self.streaming = None;
+        self.conversing = false;
         self.dirty = true;
     }
 
@@ -353,8 +370,18 @@ impl App {
             // line shorter than the one it replaces leaves the old tail behind.
             // That is the stray-character bleed at the end of scrolled lines.
             frame.render_widget(Clear, body);
-            if transcript.is_empty() {
-                frame.render_widget(empty_state(&theme, &glyphs, body.width), body);
+            // Keyed on whether a conversation has started, not on whether the
+            // transcript has lines. Startup notices are lines: an unconfigured
+            // provider prints two errors, which replaced the guidance for the
+            // one user who has never seen it before.
+            if !self.conversing {
+                let mut lines = transcript.visible(body.height as usize);
+                if !lines.is_empty() {
+                    lines.push(ratatui::text::Line::default());
+                }
+                let hints = empty_state_lines(&theme, &glyphs, body.width);
+                lines.extend(hints);
+                frame.render_widget(Paragraph::new(lines), body);
             } else {
                 let visible = transcript.visible(body.height as usize);
                 frame.render_widget(Paragraph::new(visible), body);
@@ -431,7 +458,7 @@ impl App {
             if completion.is_active() {
                 let popup = popup_area(composer_area, completion, area);
                 frame.render_widget(Clear, popup);
-                frame.render_widget(completion_widget(completion, &theme), popup);
+                frame.render_widget(completion_widget(completion, &theme, &glyphs), popup);
             }
         })?;
 
@@ -756,11 +783,15 @@ fn header<'a>(
 ///
 /// The negative space is deliberate: an empty session should look calm and
 /// finished, not like a screen waiting for content that failed to load.
-fn empty_state<'a>(
+/// The wordmark and key hints, as lines.
+///
+/// Separate from the widget so they can be appended below startup notices
+/// rather than replaced by them.
+fn empty_state_lines<'a>(
     theme: &crate::theme::Theme,
     glyphs: &Glyphs,
     width: u16,
-) -> Paragraph<'a> {
+) -> Vec<Line<'a>> {
     let hints: &[(&str, &str)] = &[
         ("type a message", "ask octane to do something"),
         ("!command", "run a shell command"),
@@ -801,12 +832,13 @@ fn empty_state<'a>(
         ));
     }
 
-    Paragraph::new(lines)
+    lines
 }
 
 fn completion_widget<'a>(
     completion: &Completion,
     theme: &crate::theme::Theme,
+    glyphs: &Glyphs,
 ) -> Paragraph<'a> {
     let (visible, highlight) = completion.visible();
 
@@ -815,7 +847,9 @@ fn completion_widget<'a>(
         .enumerate()
         .map(|(index, candidate)| {
             let selected = index == highlight;
-            let marker = if selected { "\u{25b8} " } else { "  " };
+            // From the set, or the ASCII fallback stops at the transcript.
+            let marker =
+                if selected { format!("{} ", glyphs.edit) } else { "  ".to_string() };
             let style = if selected {
                 Style::default().fg(theme.accent)
             } else {
@@ -858,7 +892,18 @@ fn status_paragraph<'a>(
         if index > 0 {
             spans.push(Span::styled(format!(" {} ", glyphs.separator), theme.dim()));
         }
-        spans.push(Span::styled(segment.text.clone(), Style::default().fg(segment.color(theme))));
+        // An alert is marked and bold, not only coloured. `bypass` is the one
+        // mode whose entire point is that the user must not forget they are in
+        // it, and under NO_COLOR a bare foreground colour makes it identical to
+        // `default`. `theme.label` already falls back to BOLD.
+        let style = match segment.emphasis {
+            crate::status::Emphasis::Alert => theme.label(segment.color(theme)),
+            _ => Style::default().fg(segment.color(theme)),
+        };
+        if segment.emphasis == crate::status::Emphasis::Alert {
+            spans.push(Span::styled(format!("{} ", glyphs.error), style));
+        }
+        spans.push(Span::styled(segment.text.clone(), style));
     }
     spans.push(Span::styled("   ", theme.dim()));
     spans.push(Span::styled(status.hints(), theme.dim()));
@@ -977,7 +1022,10 @@ fn picker_widget<'a>(
 
     lines.push(Line::default());
     lines.push(Line::styled(
-        "  ↑↓ move   enter choose   esc cancel",
+        format!(
+            "  {}{} move   enter choose   esc cancel",
+            glyphs.arrow_up, glyphs.arrow_down
+        ),
         theme.dim(),
     ));
 

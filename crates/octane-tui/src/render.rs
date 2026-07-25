@@ -122,7 +122,12 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
         ItemKind::AgentMessage { text } => {
             // Models answer in markdown whether or not asked to, so showing the
             // raw source is showing the wrong thing.
-            let mut lines = crate::markdown::render(text, theme, glyphs);
+            //
+            // The margin leads rather than trails, because tool results
+            // deliberately do not trail one: a run of calls should stay tight,
+            // and the prose that follows is what needs separating from it.
+            let mut lines = vec![Line::default()];
+            lines.extend(crate::markdown::render(text, theme, glyphs));
             lines.push(Line::default());
             lines
         }
@@ -141,7 +146,14 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
 
         ItemKind::ToolExecution { name, input, .. } => {
             let mut lines = vec![Line::from(vec![
-                Span::styled(format!("{} ", glyphs.tool), Style::default().fg(status_color(item.status, theme))),
+                // The marker, not only its colour. Under NO_COLOR every colour
+                // becomes Reset, and octane's own success and error hues are
+                // close to indistinguishable under deuteranopia even at full
+                // truecolor, so a failed call must differ in shape.
+                Span::styled(
+                    format!("{} ", status_marker(item.status, glyphs)),
+                    Style::default().fg(status_color(item.status, theme)),
+                ),
                 Span::styled(name.clone(), theme.label(theme.tool)),
                 Span::styled(format!("  {}", summarize_input(name, input)), theme.dim()),
             ])];
@@ -165,17 +177,23 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
                 (glyphs.notice, theme.tool)
             };
 
-            let mut spans = vec![
-                Span::styled(format!("  {marker} "), Style::default().fg(colour)),
-                Span::styled(title.clone(), theme.dim()),
-            ];
-            if let Some(detail) = summarize_result(name, metadata.as_ref()) {
-                spans.push(Span::styled(format!("  {detail}"), theme.dim()));
-            }
+            // The detail when there is one, else the title. For `read` and
+            // `bash` the title is the path or the description, which the call
+            // line above already shows, so printing both says the same thing
+            // twice on consecutive rows.
+            let body = match summarize_result(name, metadata.as_ref()) {
+                Some(detail) => detail,
+                None => title.clone(),
+            };
 
-            let mut lines = vec![Line::from(spans)];
-            lines.push(Line::default());
-            lines
+            // Named, because a step with several calls streams all of them
+            // before any result: the rows do not sit under the call they
+            // answer, so each has to say which one it is.
+            vec![Line::from(vec![
+                Span::styled(format!("  {marker} "), Style::default().fg(colour)),
+                Span::styled(format!("{name}  "), theme.dim()),
+                Span::styled(body, theme.dim()),
+            ])]
         }
 
         ItemKind::Diff { path, unified } => {
@@ -387,6 +405,20 @@ pub fn summarize_input(tool: &str, input: &str) -> String {
     };
 
     truncate(&summary, 60)
+}
+
+/// The marker for a call's outcome.
+///
+/// Paired with [`status_color`] rather than replaced by it: colour is the fast
+/// signal for those who can use it, and the glyph is what survives NO_COLOR,
+/// a monochrome terminal, and colour blindness.
+fn status_marker(status: ItemStatus, glyphs: &crate::glyphs::Glyphs) -> &'static str {
+    match status {
+        ItemStatus::Completed => glyphs.ok,
+        ItemStatus::Failed => glyphs.error,
+        ItemStatus::Canceled => glyphs.notice,
+        ItemStatus::Started | ItemStatus::Streaming => glyphs.tool,
+    }
 }
 
 fn status_color(status: ItemStatus, theme: &Theme) -> ratatui::style::Color {
@@ -667,7 +699,9 @@ mod tests {
         });
         let rendered = text_of(&render(&event));
 
-        assert!(rendered.contains("flake.nix"));
+        // Names the tool, since a step with several calls streams every call
+        // before any result, and reports the size rather than the contents.
+        assert!(rendered.contains("read"));
         assert!(rendered.contains("62 lines"));
         assert!(!rendered.contains("<file"), "wire framing must not be shown");
     }
@@ -700,5 +734,36 @@ mod tests {
             "the marker must differ, not only the colour"
         );
         assert!(failed.contains("exit 101"), "and the words must say so: {failed:?}");
+    }
+
+    #[test]
+    fn a_tool_call_outcome_survives_without_colour() {
+        // Under NO_COLOR every colour becomes Reset, so anything encoded only
+        // in the foreground disappears. octane's own success and error hues are
+        // also close under deuteranopia, which affects roughly one in twelve
+        // men even on a truecolor terminal.
+        let call = |status| {
+            Event::Item(ItemEvent::Completed {
+                turn_id: TurnId::new(),
+                item: Item {
+                    id: ItemId::new(),
+                    kind: ItemKind::ToolExecution {
+                        call_id: octane_protocol::ToolCallId::new(),
+                        name: "bash".into(),
+                        input: "{\"description\":\"run the tests\"}".into(),
+                    },
+                    status,
+                },
+            })
+        };
+
+        let completed = text_of(&render(&call(ItemStatus::Completed)));
+        let failed = text_of(&render(&call(ItemStatus::Failed)));
+        let canceled = text_of(&render(&call(ItemStatus::Canceled)));
+
+        let marker = |text: &str| text.chars().next();
+        assert_ne!(marker(&completed), marker(&failed));
+        assert_ne!(marker(&completed), marker(&canceled));
+        assert_ne!(marker(&failed), marker(&canceled));
     }
 }

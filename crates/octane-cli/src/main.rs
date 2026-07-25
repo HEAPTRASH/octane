@@ -1728,6 +1728,39 @@ async fn run_turn(
                     app.status_mut().cost_usd += reported.cost;
                     session_usage.add(reported);
                 }
+
+                // The activity line names what is running. It was set once to
+                // "Thinking" and never reassigned, so a forty-second build read
+                // as forty seconds of thinking. `Activity::label` was
+                // documented and unit-tested for this and nothing produced it.
+                if let octane_protocol::Event::Item(item_event) = &event {
+                    let item = match item_event {
+                        octane_protocol::ItemEvent::Started { item, .. }
+                        | octane_protocol::ItemEvent::Completed { item, .. } => Some(item),
+                        _ => None,
+                    };
+                    if let Some(item) = item {
+                        let label = match &item.kind {
+                            octane_protocol::ItemKind::ToolExecution { name, input, .. } => Some(
+                                format!(
+                                    "{name} {}",
+                                    octane_tui::render::summarize_input(name, input)
+                                ),
+                            ),
+                            // Back to waiting on the model once a call answers.
+                            octane_protocol::ItemKind::ToolResult { .. } => {
+                                Some("Thinking".to_string())
+                            }
+                            _ => None,
+                        };
+                        if let Some(label) = label {
+                            if let Some(activity) = app.status_mut().activity.as_mut() {
+                                activity.label = label;
+                            }
+                        }
+                    }
+                }
+
                 app.push_event(&event)?;
             }
 

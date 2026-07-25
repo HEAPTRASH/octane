@@ -108,11 +108,18 @@ impl StatusLine {
     ///
     /// Shows the escape hatch while working and the mode switch while idle —
     /// what the user most plausibly wants next in each state.
-    pub fn hints(&self) -> &'static str {
+    /// Key hints for the right of the status line.
+    ///
+    /// Returns an owned string so it can consult `glyphs`. It used to be
+    /// `&'static str` holding a hardcoded `\u{2b7e}`, which meant the ASCII
+    /// fallback could not reach it, and which was above the U+2900 ceiling the
+    /// glyph tests enforce. The modifier is spelled out instead: no symbol for
+    /// shift+tab is both widely rendered and unambiguously narrow.
+    pub fn hints(&self) -> String {
         if self.activity.is_some() {
-            "esc interrupt"
+            "esc interrupt".to_string()
         } else {
-            "⇧⭾ mode · ctrl+c exit"
+            format!("shift+tab mode {} ctrl+c exit", self.glyphs.separator)
         }
     }
 }

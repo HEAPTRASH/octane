@@ -43,6 +43,12 @@ pub struct Glyphs {
     pub question: &'static str,
     /// Marks a system notice.
     pub notice: &'static str,
+    /// Marks a call that succeeded.
+    ///
+    /// Exists so status is not carried by colour alone. U+2713 is text
+    /// presentation and stays one cell; its neighbour U+2714 does not, which
+    /// is why the obvious choice is the wrong one.
+    pub ok: &'static str,
 
     /// Horizontal rule.
     pub rule: &'static str,
@@ -77,6 +83,7 @@ pub const UNICODE: Glyphs = Glyphs {
     error: "\u{2717}",    // ✗ ballot X — text presentation, unlike ✘
     question: "\u{25c6}", // ◆ black diamond
     notice: "\u{00b7}",   // · middle dot
+    ok: "\u{2713}",       // ✓ check mark, text presentation
 
     rule: "\u{2500}",      // ─
     separator: "\u{00b7}", // ·
@@ -114,6 +121,7 @@ pub const ASCII: Glyphs = Glyphs {
     error: "x",
     question: "?",
     notice: "-",
+    ok: "v",
 
     rule: "-",
     separator: "|",
@@ -213,6 +221,7 @@ mod tests {
             for glyph in [
                 set.prompt, set.tool, set.edit, set.error, set.question, set.notice, set.rule,
                 set.separator, set.arrow_up, set.arrow_down, set.claw, set.bullet, set.bar,
+                set.ok,
             ] {
                 assert!(single_width(glyph), "{glyph:?} must be one cell");
             }
@@ -231,7 +240,7 @@ mod tests {
         // U+2600-U+27BF default to emoji presentation. Staying below U+2900
         // keeps every glyph unambiguously narrow.
         for set in [UNICODE, ASCII] {
-            for glyph in [set.prompt, set.tool, set.edit, set.error, set.question, set.claw] {
+            for glyph in [set.prompt, set.tool, set.edit, set.error, set.question, set.claw, set.ok] {
                 for ch in glyph.chars() {
                     assert!(
                         (ch as u32) < 0x2900,
@@ -300,5 +309,50 @@ mod tests {
             bar.chars().any(|c| ('\u{2581}'..'\u{2588}').contains(&c)),
             "expected a partial block in {bar:?}"
         );
+    }
+
+    #[test]
+    fn no_source_literal_strays_above_the_ceiling() {
+        // The struct-field check above only sees glyphs that went through the
+        // set. A hardcoded literal elsewhere bypasses it entirely, which is how
+        // `\u{2b7e}` reached the status line and survived the ASCII fallback:
+        // the function returned `&'static str` and so could not consult the
+        // set at all.
+        //
+        // Comment lines are skipped, because the module doc names banned
+        // codepoints on purpose in order to explain why they are banned.
+        //
+        // This scans characters, so it catches a pasted glyph and not a
+        // `\u{...}` escape. That is the right trade: pasting is how the
+        // violation actually happened, while an escape spells the codepoint out
+        // where a reviewer can see it.
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut offenders = Vec::new();
+
+        for entry in std::fs::read_dir(&root).expect("src is readable") {
+            let path = entry.expect("entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("source is utf-8");
+            for (number, line) in source.lines().enumerate() {
+                let trimmed = line.trim_start();
+                if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                    continue;
+                }
+                for ch in line.chars() {
+                    if ch as u32 >= 0x2900 {
+                        offenders.push(format!(
+                            "{}:{}: U+{:04X}",
+                            path.file_name().unwrap_or_default().to_string_lossy(),
+                            number + 1,
+                            ch as u32
+                        ));
+                    }
+                }
+            }
+        }
+
+        assert!(offenders.is_empty(), "codepoints above U+2900 in source: {offenders:#?}");
     }
 }
