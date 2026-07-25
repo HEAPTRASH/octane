@@ -643,3 +643,87 @@ Composing the above, the loop body per step:
 ```
 
 Everything in brackets is a separate crate with one responsibility. The loop itself coordinates and holds no domain logic — that's the SRP line, and it's also what makes each piece testable without a model.
+
+---
+
+# Addendum: terminal UI
+
+Studied opencode's TUI, [pi](https://github.com/badlogic/pi-mono) (Mario Zechner's minimal agent), and Cline. The single most consequential finding is the first one.
+
+## H. Two kinds of TUI, and why the choice is not cosmetic
+
+pi's write-up frames this better than anything else I found. There are exactly two ways to build a terminal UI, and picking one determines what the product can do.
+
+**Full-screen.** Take over the viewport, treat it as a grid of cells, draw everything yourself. Used by **opencode** and Amp.
+
+- You lose the scrollback buffer, so you must implement your own scrolling.
+- You lose terminal search (`cmd+F`), so you must implement your own.
+- Copy/paste stops selecting what the user expects.
+- Mouse scrolling "always feels kind of off", because you are re-implementing something the terminal already does well.
+
+**Scrollback.** Write to the terminal like a normal CLI, appending to scrollback, and only move the cursor back up within the visible region to redraw the live parts — the input box and the spinner. Used by **Claude Code, Codex, Droid, and pi**.
+
+- Native scrolling, native search, native copy/paste, native everything.
+- Works over SSH and in tmux without special handling.
+- Constrains what the UI can be — which is a feature. A coding agent is a linear chat: prompt, replies, tool calls, results. That maps onto the terminal's native model exactly.
+
+**Taking the scrollback approach.** A coding agent gains nothing from owning the viewport, and loses the three things users actually rely on. Ratatui supports this directly: `Viewport::Inline(n)` keeps a small live region at the bottom while `Terminal::insert_before()` pushes finished content up into real scrollback.
+
+### Flicker and redraw
+
+Two techniques, both from pi, both cheap:
+
+**Synchronized output.** Wrap every frame in `CSI ?2026h` … `CSI ?2026l` so the terminal buffers and presents atomically. Supported by most modern terminals; the difference between "flickers noticeably" and "does not" in Ghostty/iTerm2.
+
+**Differential rendering.** Keep the previously rendered lines, find the first line that differs, move the cursor there, redraw to the end. Three cases:
+
+1. First render — write everything.
+2. Width changed — full clear and re-render, because soft wrapping moved.
+3. Otherwise — redraw from the first differing line.
+
+With one catch: if the first change is *above* the viewport (the user scrolled), a full re-render is required, because the terminal will not let you write into scrollback above the visible region.
+
+**Cache completed components.** A fully-streamed assistant message never needs its markdown re-parsed. Render once, keep the lines. This is what makes "compare every line every frame" affordable.
+
+## I. Interaction patterns worth adopting
+
+**From opencode:**
+
+| Affordance | Why |
+|---|---|
+| `@path` fuzzy file reference | Pulls file content into context without a tool call round trip |
+| `!command` prefix | Runs a shell command directly, output attached as a tool result — no inference spent to run `ls` |
+| `/command` picker | Discoverable slash commands |
+| Leader key (`ctrl+x`) | Chords instead of colliding with terminal/readline bindings |
+| `/details` | Toggle tool-execution detail — collapsed by default, expandable |
+| `/thinking` | Toggle reasoning block visibility |
+| `/undo`, `/redo` | Git-backed, removes the message *and* the file changes |
+| `/editor` | Compose in `$EDITOR` for long prompts |
+| Attention notifications | Bell/notification when the agent needs input after going quiet |
+
+**From Cline:** Plan/Act as the primary interaction axis, with conversation carried across the switch — the planning context is the point, so discarding it on transition would defeat the purpose. Cline also allows **different models per mode**: a stronger reasoning model for Plan, a faster one for Act.
+
+**From Antigravity** (§2 earlier): the edit-approval prompt offers `y` / `n` / `f` full-screen diff / `Ctrl+G` open in `$EDITOR` — **or type instructions**, which rejects the edit *and tells the agent what to do differently*. That turns a permission prompt into a steering opportunity, and it is the single best idea in any of these UIs.
+
+## J. What the status line has to answer
+
+Three questions a user has constantly, none of which should require a command:
+
+- **What will happen if I hit enter?** — the active mode, since `plan` and `bypass` behave completely differently.
+- **How much room is left?** — context utilization, before compaction surprises them.
+- **What is this costing?** — cumulative session spend.
+
+Plus which model is answering, since mid-session switching is a feature.
+
+## K. Layout
+
+```
+ ← native scrollback: finished messages, tool calls, diffs.
+   Terminal owns scrolling, search, and selection.
+
+  ⠋ Editing src/main.rs · 12s · ↑1.2k ↓340          ← transient, only while working
+ ╭──────────────────────────────────────────────╮
+ │ > _                                          │   ← inline viewport
+ ╰──────────────────────────────────────────────╯
+   build · sonnet-5 · ctx 12% · $0.04 · ⇧⭾ mode      ← status
+```

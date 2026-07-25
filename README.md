@@ -6,13 +6,14 @@ Design notes and the survey the architecture is derived from are in [`RESEARCH.m
 
 ## Status
 
-Early. The subsystems below are implemented and tested. Seven tools work — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment. The interactive session is not wired up yet.
+Early. The subsystems below are implemented and tested. Seven tools work — `read`, `write`, `edit`, `bash`, `glob`, `grep`, `list` — with `bash` under real OS containment. The TUI runs; model inference is not wired up yet, so `!shell` and `/commands` work end to end but prompts do not.
 
 ```
 $ octane doctor                                        # resolved config: sandbox, writable roots, mode
 $ octane tool read '{"path":"src/main.rs","limit":40}' # run one tool, no model involved
 $ octane tool bash '{"command":"cargo test","description":"runs the tests"}'
 $ octane tool grep '{"pattern":"TODO","mode":"files","glob":"**/*.rs"}'
+$ octane                                               # interactive session
 ```
 
 `octane tool` applies the same policy and containment a real turn would, which makes "is the sandbox actually on?" answerable without spending a token.
@@ -51,10 +52,20 @@ One responsibility per crate. The dependency direction is strictly one-way — n
 | `octane-commands` | slash command discovery and template expansion | running the shell |
 | `octane-mcp` | MCP JSON-RPC lifecycle, stdio transport, tool adapter | permission decisions |
 | `octane-core` | the ReAct loop, agents, prompt assembly, stop conditions | **any domain logic** |
-| `octane-tui` | terminal client | agent logic |
+| `octane-tui` | terminal client: composer, keymap, event rendering, approvals | agent logic |
 | `octane-cli` | argument parsing, config resolution | everything else |
 
 `octane-core` coordinates and holds no domain logic. Every collaborator is a trait, which is why the loop is testable without a model, a shell, or a network — see the scripted-provider tests in `crates/octane-core/src/turn.rs`.
+
+## The TUI is scrollback, not full screen
+
+The most consequential UI decision (`RESEARCH.md` §H). There are two ways to build a terminal UI: own the viewport as a cell grid (opencode, Amp), or append to scrollback and redraw only the live rows (Claude Code, Codex, pi).
+
+Owning the viewport costs the scrollback buffer, terminal search, and sane copy/paste — all of which then have to be reimplemented, and mouse scrolling never quite feels right afterwards. A coding agent is a linear chat, which maps onto the terminal's native model exactly, so it pays that price for nothing.
+
+So: finished content goes into real scrollback via `Terminal::insert_before`, and only a small `Viewport::Inline` region — composer, activity line, status — is redrawn. Frames are wrapped in synchronized-output escapes (`CSI ?2026h`/`l`) so the terminal presents them atomically instead of tearing.
+
+Everything in `octane-tui` except `app` is pure — state in, lines out — because rendering and keybinding logic is where the bugs are and it should be testable by calling a function.
 
 ## The two layers that are easy to conflate
 
@@ -75,12 +86,15 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 - **The model decides when the task is done.** The step cap, loop detector, and context thresholds are safety rails, not completion criteria.
 - **`.gitignore` is honoured even outside a git repo** (`require_git(false)`). `ignore` defaults the other way to match ripgrep's CLI, but an agent gets pointed at extracted archives and vendored subtrees that have a `.gitignore` and no `.git`. Honouring it only sometimes reads as the tool being bad, not as a subtlety.
 - **`glob` sorts by mtime, `list` sorts alphabetically.** Recency is the cheapest relevance signal when hunting for a file, but a tree whose branches move between calls is harder to reason about than a stable one.
+- **An approval prompt accepts instructions, not just yes/no.** Antigravity's idea, and the best one in any UI surveyed: typing at a prompt rejects the action *and tells the agent what to do differently*. The common case is not "no", it is "no, do it this other way", and a prompt that cannot express that forces the user to reject, wait, and retype their intent.
+- **There is no "always allow" key.** A grant that broad should be a deliberate config edit, not one keystroke away from a prompt someone is trying to dismiss.
+- **Esc interrupts; it does not exit.** Those are different intentions, and conflating them loses sessions to a reflex. `ctrl+d` exits only on an empty composer for the same reason.
 - **Loop detection hashes `(tool, input, output)`.** Including the output is what makes it correct: a repeated call whose output *changed* is progress — polling a build, tailing a log.
 
 ## Testing
 
 ```bash
-cargo test --workspace       # 268 tests
+cargo test --workspace       # 341 tests
 cargo clippy --workspace --all-targets
 ```
 

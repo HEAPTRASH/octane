@@ -114,15 +114,12 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()?
                 .block_on(run_tool(&name, &input, &workspace, sandbox, mode))
         }
-        None => {
-            // The interactive TUI is not wired up yet. Saying so plainly beats a
-            // panic or a silent no-op.
-            println!("octane {}", env!("CARGO_PKG_VERSION"));
-            println!();
-            println!("The interactive session is not wired up yet.");
-            println!("Run `octane doctor` to inspect the resolved configuration.");
-            Ok(())
-        }
+        None => tokio::runtime::Runtime::new()?.block_on(interactive(
+            &workspace,
+            sandbox,
+            mode,
+            cli.model.as_deref(),
+        )),
     }
 }
 
@@ -241,5 +238,139 @@ async fn run_tool(
             Ok(())
         }
         Err(error) => anyhow::bail!("{error}"),
+    }
+}
+
+/// The interactive session.
+///
+/// Drives the TUI directly. Model inference is not wired up yet, so submissions
+/// that need it say so rather than hanging — but `!` shell commands and `/`
+/// commands work end to end, which makes the whole input path exercisable.
+async fn interactive(
+    workspace: &Utf8PathBuf,
+    sandbox: SandboxPolicy,
+    mode: PermissionMode,
+    model: Option<&str>,
+) -> Result<()> {
+    use octane_protocol::{Item, ItemId, ItemKind, ItemStatus, ToolCallId, TurnId};
+    use octane_tui::{App, AppEvent, StatusLine, Submission};
+
+    let contained = sandbox.is_contained();
+    let mut app = App::new(StatusLine {
+        mode,
+        model: model.unwrap_or("unset").to_string(),
+        ..Default::default()
+    })?;
+
+    let banner = vec![
+        ratatui::text::Line::from(format!("octane {}", env!("CARGO_PKG_VERSION"))),
+        ratatui::text::Line::from(format!(
+            "{}  ·  sandbox {}",
+            workspace,
+            if contained { "on" } else { "OFF" }
+        )),
+        ratatui::text::Line::from("/help for commands · !cmd to run a shell command · ctrl+c to exit"),
+        ratatui::text::Line::default(),
+    ];
+    app.push_lines(banner)?;
+
+    let completed = |kind: ItemKind| {
+        octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed {
+            turn_id: TurnId::new(),
+            item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
+        })
+    };
+
+    loop {
+        app.draw()?;
+
+        let Some(event) = app.poll()? else { continue };
+
+        match event {
+            AppEvent::Exit => break,
+            AppEvent::Interrupt => {}
+            AppEvent::ModeChanged(_) => {}
+
+            AppEvent::Submit(Submission::Command { name, .. }) => {
+                app.push_event(&completed(ItemKind::UserMessage { text: format!("/{name}") }))?;
+                let body = match name.as_str() {
+                    "help" => HELP.to_string(),
+                    "exit" | "quit" => break,
+                    other => format!("Unknown command /{other}. Try /help."),
+                };
+                app.push_event(&completed(ItemKind::AgentMessage { text: body }))?;
+            }
+
+            AppEvent::Submit(Submission::Shell { command }) => {
+                app.push_event(&completed(ItemKind::UserMessage {
+                    text: format!("!{command}"),
+                }))?;
+                let output = run_shell(&command, workspace, &sandbox).await;
+                app.push_event(&completed(ItemKind::ToolExecution {
+                    call_id: ToolCallId::new(),
+                    name: "bash".into(),
+                    input: serde_json::json!({
+                        "command": command,
+                        "description": "user-issued shell command"
+                    })
+                    .to_string(),
+                }))?;
+                app.push_event(&completed(ItemKind::AgentMessage { text: output }))?;
+            }
+
+            AppEvent::Submit(Submission::Prompt { text, .. }) => {
+                app.push_event(&completed(ItemKind::UserMessage { text }))?;
+                app.push_event(&completed(ItemKind::Error {
+                    message: "No model is wired up yet. `!command` and `/help` work."
+                        .into(),
+                }))?;
+            }
+        }
+    }
+
+    app.restore()?;
+    Ok(())
+}
+
+const HELP: &str = "\
+  /help              show this
+  /exit              quit
+  !<command>         run a shell command
+  @path              reference a file in a prompt
+
+  shift+tab          cycle permission mode
+  shift+enter        newline
+  ctrl+u             clear the input
+  esc                interrupt while working
+  ctrl+c             exit";
+
+/// Run a shell command through the `bash` tool, so it gets the same containment
+/// and bounds an agent-issued command would.
+async fn run_shell(
+    command: &str,
+    workspace: &Utf8PathBuf,
+    sandbox: &SandboxPolicy,
+) -> String {
+    use octane_protocol::{SessionId, ToolCallId};
+    use octane_tools::{BashTool, Tool, ToolContext};
+
+    let tool = BashTool::new(sandbox.clone());
+    let ctx = ToolContext {
+        session_id: SessionId::new(),
+        call_id: ToolCallId::new(),
+        agent: "build".into(),
+        workspace: workspace.clone(),
+        cwd: workspace.clone(),
+        cancel: Default::default(),
+    };
+    let input = serde_json::json!({
+        "command": command,
+        "description": "user-issued shell command"
+    })
+    .to_string();
+
+    match tool.execute(&input, &ctx).await {
+        Ok(outcome) => outcome.output,
+        Err(error) => error.to_string(),
     }
 }

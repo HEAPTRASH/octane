@@ -736,6 +736,8 @@ dependencies = [
  "octane-sandbox",
  "octane-tools",
  "octane-tui",
+ "ratatui",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -892,11 +894,15 @@ name = "octane-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "crossterm",
  "octane-core",
  "octane-permission",
  "octane-protocol",
+ "octane-provider",
+ "octane-tools",
  "ratatui",
+ "serde_json",
  "tokio",
 ]
 
