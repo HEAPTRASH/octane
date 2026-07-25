@@ -85,13 +85,26 @@ pub enum SandboxPolicy {
 
 impl SandboxPolicy {
     /// The default for an interactive session in a project directory.
+    ///
+    /// Temp directories are writable because denying them breaks ordinary tools
+    /// for no security gain — git alone fails to create its xcrun cache in
+    /// `/tmp` and prints an error per invocation. Codex allows the same set.
+    /// `/tmp` and `/private/tmp` are both listed: on macOS the former is a
+    /// symlink to the latter, and a tool may open either name.
     pub fn workspace(project_root: impl Into<Utf8PathBuf>, tmpdir: Option<Utf8PathBuf>) -> Self {
         let mut writable_roots = vec![WritableRoot::project(project_root)];
-        // Build tooling assumes a writable temp dir; denying it breaks cargo,
-        // pytest, and most compilers for no security gain.
-        if let Some(tmp) = tmpdir {
-            writable_roots.push(WritableRoot::plain(tmp));
+
+        for temp in ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"] {
+            writable_roots.push(WritableRoot::plain(temp));
         }
+        if let Some(tmp) = tmpdir {
+            // Deduplicated, or the same path appears twice as separate
+            // sandbox parameters.
+            if !writable_roots.iter().any(|root| root.path == tmp) {
+                writable_roots.push(WritableRoot::plain(tmp));
+            }
+        }
+
         Self::WorkspaceWrite { writable_roots, network: NetworkPolicy::Denied }
     }
 
@@ -144,6 +157,27 @@ mod tests {
         assert!(policy.permits_write(Utf8Path::new("/proj/x")));
         assert!(!policy.permits_write(Utf8Path::new("/etc/hosts")));
         assert!(!policy.permits_write(Utf8Path::new("/proj-other/x")));
+        // Still nothing outside the project and the temp dirs.
+        assert!(!policy.permits_write(Utf8Path::new("/Users/someone/.ssh/id_rsa")));
+    }
+
+    #[test]
+    fn temp_directories_are_writable() {
+        // Denying them breaks git, cargo, and most compilers for no gain: git
+        // alone prints an xcrun cache error on every invocation without /tmp.
+        let policy = SandboxPolicy::workspace("/proj", None);
+        for temp in ["/tmp/x", "/private/tmp/x", "/var/tmp/x"] {
+            assert!(policy.permits_write(Utf8Path::new(temp)), "{temp} should be writable");
+        }
+    }
+
+    #[test]
+    fn a_tmpdir_already_covered_is_not_added_twice() {
+        // Duplicates become duplicate sandbox parameters.
+        let policy = SandboxPolicy::workspace("/proj", Some("/tmp".into()));
+        let tmp_roots =
+            policy.writable_roots().iter().filter(|root| root.path == "/tmp").count();
+        assert_eq!(tmp_roots, 1);
     }
 
     #[test]

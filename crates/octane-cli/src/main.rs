@@ -65,6 +65,9 @@ enum Command {
     /// List configured providers and models.
     Models,
 
+    /// Print the resolved settings and where they came from.
+    Settings,
+
     /// Set up a provider.
     ///
     /// Writes `.octane/providers/<name>.json` and says which environment
@@ -113,18 +116,38 @@ fn main() -> Result<()> {
         None => Utf8PathBuf::try_from(std::env::current_dir()?)?,
     };
 
-    let sandbox = if cli.no_sandbox {
-        SandboxPolicy::DangerFullAccess
-    } else {
+    // Settings are the baseline; command-line flags override them, because a
+    // flag is a deliberate one-off and a file is a standing preference.
+    let (settings, settings_errors) =
+        octane_config::Settings::load(&octane_config::roots(&workspace));
+
+    let sandboxed = !cli.no_sandbox && settings.sandbox.unwrap_or(true);
+    let sandbox = if sandboxed {
         SandboxPolicy::workspace(workspace.clone(), std::env::var("TMPDIR").ok().map(Into::into))
+    } else {
+        SandboxPolicy::DangerFullAccess
     };
 
-    let mode: PermissionMode = cli.mode.into();
+    // `--mode` has a default, so it cannot be distinguished from unset. The
+    // settings file wins only when the flag was left at its default.
+    let mode: PermissionMode = match (cli.mode, settings.mode) {
+        (ModeArg::Default, Some(configured)) => configured,
+        (flag, _) => flag.into(),
+    };
 
     match cli.command {
         Some(Command::Models) => list_models(&workspace),
+        Some(Command::Settings) => {
+            print!("{}", render_settings(&workspace));
+            Ok(())
+        }
         Some(Command::Connect { provider, user }) => connect(&workspace, provider.as_deref(), user),
-        Some(Command::Doctor) => doctor(&workspace, &sandbox, mode, cli.model.as_deref()),
+        Some(Command::Doctor) => doctor(
+            &workspace,
+            &sandbox,
+            mode,
+            cli.model.as_deref().or(settings.model.as_deref()),
+        ),
         
         Some(Command::Tool { name, input }) => {
             // Built here rather than in main so the async runtime is only started
@@ -132,12 +155,19 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()?
                 .block_on(run_tool(&name, &input, &workspace, sandbox, mode))
         }
-        None => tokio::runtime::Runtime::new()?.block_on(interactive(
-            &workspace,
-            sandbox,
-            mode,
-            cli.model.as_deref(),
-        )),
+        None => {
+            // Resolved before the move, since the flag takes precedence and the
+            // settings value is owned by what is about to be handed over.
+            let model = cli.model.clone().or_else(|| settings.model.clone());
+            tokio::runtime::Runtime::new()?.block_on(interactive(
+                &workspace,
+                sandbox,
+                mode,
+                model.as_deref(),
+                settings,
+                settings_errors,
+            ))
+        }
     }
 }
 
@@ -284,6 +314,8 @@ async fn interactive(
     sandbox: SandboxPolicy,
     mode: PermissionMode,
     model: Option<&str>,
+    settings: octane_config::Settings,
+    settings_errors: Vec<octane_config::SettingsError>,
 ) -> Result<()> {
     use octane_protocol::{ItemKind, ToolCallId};
     use octane_tui::{App, AppEvent, Candidate, StatusLine, Submission};
@@ -324,13 +356,19 @@ async fn interactive(
     };
     let mut history: Vec<octane_protocol::Message> = Vec::new();
     // Runtime override for the model's configured default.
-    let mut thinking = selected
-        .as_ref()
-        .map(|resolved| resolved.thinking)
-        .unwrap_or_default();
+    let mut thinking = settings.thinking.unwrap_or_else(|| {
+        selected.as_ref().map(|resolved| resolved.thinking).unwrap_or_default()
+    });
+
+    if settings.show_reasoning.unwrap_or(false) {
+        app.options_mut().reasoning = octane_tui::render::Reasoning::Shown;
+    }
 
     // Configuration problems are said once, at the top, rather than surfacing as
     // a confusing failure on the first prompt.
+    for error in &settings_errors {
+        app.push_event(&completed_static(ItemKind::Error { message: error.to_string() }))?;
+    }
     for error in registry.errors() {
         app.push_event(&completed_static(ItemKind::Error { message: error.to_string() }))?;
     }
@@ -432,8 +470,15 @@ async fn interactive(
                     prompt,
                 ));
 
-                run_turn(&mut app, model, &mut history, workspace, &sandbox, mode, thinking)
-                    .await?;
+                let session = Session {
+                    model,
+                    workspace,
+                    sandbox: &sandbox,
+                    mode,
+                    thinking,
+                    permissions: &settings.permissions,
+                };
+                run_turn(&mut app, &session, &mut history).await?;
             }
         }
     }
@@ -855,15 +900,22 @@ fn set_thinking(
 /// and the terminal, so the UI keeps repainting and Esc keeps working while the
 /// model is talking. Awaiting the turn directly would freeze the interface for
 /// its whole duration.
-async fn run_turn(
-    app: &mut octane_tui::App,
-    model: &std::sync::Arc<dyn octane_provider::LanguageModel>,
-    history: &mut Vec<octane_protocol::Message>,
-    workspace: &Utf8PathBuf,
-    sandbox: &SandboxPolicy,
+/// Everything a turn needs that does not change between turns.
+struct Session<'a> {
+    model: &'a std::sync::Arc<dyn octane_provider::LanguageModel>,
+    workspace: &'a Utf8PathBuf,
+    sandbox: &'a SandboxPolicy,
     mode: PermissionMode,
     thinking: octane_provider::Thinking,
+    permissions: &'a octane_config::settings::Permissions,
+}
+
+async fn run_turn(
+    app: &mut octane_tui::App,
+    session: &Session<'_>,
+    history: &mut Vec<octane_protocol::Message>,
 ) -> Result<()> {
+    let Session { model, workspace, sandbox, mode, thinking, permissions } = *session;
     use octane_core::{EventSink, ModelStepSource, TurnRunner};
     use octane_permission::{Policy, Scope};
     use octane_protocol::TurnId;
@@ -875,11 +927,25 @@ async fn run_turn(
     octane_tools::register_all(&mut registry, tracker, sandbox.clone());
     let registry = std::sync::Arc::new(registry);
 
-    let (policy, _errors) = Policy::builder()
+    // Configured rules layer on the baseline. Deny still beats everything, so a
+    // permissive `allow` in a project file cannot widen past the baseline denies.
+    let mut builder = Policy::builder()
         .workspace_root(workspace.as_str())
-        .with_baseline_denies()
-        .ask("command(*)", Scope::User)
-        .build();
+        .with_baseline_denies();
+    for rule in &permissions.deny {
+        builder = builder.deny(rule, Scope::Project);
+    }
+    for rule in &permissions.ask {
+        builder = builder.ask(rule, Scope::Project);
+    }
+    for rule in &permissions.allow {
+        builder = builder.allow(rule, Scope::Project);
+    }
+    // Nothing configured at all still asks before running commands.
+    if permissions.ask.is_empty() && permissions.allow.is_empty() {
+        builder = builder.ask("command(*)", Scope::User);
+    }
+    let (policy, _errors) = builder.build();
 
     let (approver, mut approvals) = TuiApprover::new();
     let (sink, mut events) = EventSink::new(TurnId::new());
