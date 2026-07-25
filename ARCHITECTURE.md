@@ -1,9 +1,10 @@
 # Architecture
 
-Orientation for anyone working in this repository: the toolchain's sharp edges,
-the crate layering, and the invariants whose violation is silent.
+Orientation for anyone — human or agent — working in this repository: the
+toolchain's sharp edges, the crate layering, and the invariants whose violation
+is silent.
 
-octane is an AI coding agent for the terminal, in Rust. It is early: the harness, tools, and TUI work; nothing makes an LLM request yet.
+octane is an AI coding agent for the terminal, in Rust. It is early, but it runs end to end: the harness, tools, TUI, and provider layer all work, and a turn goes prompt → streamed tool call → sandboxed execution → answer against a real model.
 
 ## Toolchain
 
