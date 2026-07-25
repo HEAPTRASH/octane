@@ -823,3 +823,34 @@ Junie's `${VAR}` handling and merge semantics, catwalk's provider-with-models sh
 **Unusable providers are listed with a reason.** Filtering a provider out because its variable is unset, silently, is how someone loses an hour. Junie fails the whole load; we report and continue, so one bad file does not stop a session.
 
 Discovery from `~/.octane/providers/*.json` and `.octane/providers/*.json`, filename as the provider key, project winning. A file replaces a built-in of the same name wholesale rather than merging — a half-overridden connection is harder to reason about, and merging makes it impossible to *remove* a model.
+
+---
+
+# Addendum: subscription auth
+
+## P. Anthropic: third-party subscription auth is off the table
+
+Not a technical limitation. A policy one, enforced.
+
+- **19 March 2026** — opencode merged [PR #18186](https://github.com/anomalyco/opencode/pull/18186), commit message "anthropic legal requests", removing the Anthropic OAuth plugin, the Claude system prompt, and every reference to Claude Pro/Max authentication.
+- **4 April 2026** — Anthropic enforced a policy that Claude Pro, Max, and Team subscriptions no longer cover usage through third-party harnesses authenticating by OAuth.
+
+So octane **will not implement Claude Pro/Max OAuth**. It would breach Anthropic's terms, it is the exact thing a comparable project received legal demands over, and it is actively being blocked, so it would break regardless. Anthropic access is by API key, which is supported and is what the API is for.
+
+## Q. OpenAI: documented for first-party clients, unclear for others
+
+OpenAI documents two sign-in paths for Codex — ChatGPT subscription and API key — and `codex login` opens a browser flow. That is documented for *OpenAI's own* surfaces: the ChatGPT desktop app, Codex CLI, and the IDE extension.
+
+Whether a third-party client may use the same flow is not stated anywhere OpenAI publishes, and the practical route people ask about is reusing Codex's own client ID — which is impersonating a first-party client, not an integration. Developers are asking on OpenAI's forum how to do it correctly, which is itself a sign there is no sanctioned answer.
+
+octane will not ship a hardcoded first-party client ID.
+
+## R. What octane does instead
+
+Build the mechanism, not the credentials.
+
+1. **API keys everywhere.** Supported by every provider, and the only path that is unambiguously permitted.
+2. **A generic OAuth 2.0 flow** — authorization code with PKCE, and device code — driven entirely from the provider JSON: `clientId`, endpoints, scopes. If a provider sanctions third-party subscription access, it becomes a config file rather than a code change. Enterprise gateways behind an IdP need this regardless, and that is a case nobody objects to.
+3. **`tokenFile`**, already present: mint a token however you like out of band, octane reads it. This is the escape hatch for anything octane should not be doing itself.
+
+The line: octane ships the protocol, and the user supplies the client identity. A harness that hardcodes someone else's client ID is not integrating with a provider, it is pretending to be one.

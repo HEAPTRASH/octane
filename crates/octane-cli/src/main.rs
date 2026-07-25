@@ -65,6 +65,18 @@ enum Command {
     /// List configured providers and models.
     Models,
 
+    /// Set up a provider.
+    ///
+    /// Writes `.octane/providers/<name>.json` and says which environment
+    /// variable to set. Run without a name to see what is available.
+    Connect {
+        /// Provider to configure, e.g. `anthropic`, `openrouter`, `ollama`.
+        provider: Option<String>,
+        /// Write to `~/.octane` instead of the project.
+        #[arg(long)]
+        user: bool,
+    },
+
     /// Print the resolved configuration and exit.
     ///
     /// Exists because "why did it ask me that?" and "what can it write to?" are
@@ -111,6 +123,7 @@ fn main() -> Result<()> {
 
     match cli.command {
         Some(Command::Models) => list_models(&workspace),
+        Some(Command::Connect { provider, user }) => connect(&workspace, provider.as_deref(), user),
         Some(Command::Doctor) => doctor(&workspace, &sandbox, mode, cli.model.as_deref()),
         
         Some(Command::Tool { name, input }) => {
@@ -328,6 +341,7 @@ async fn interactive(
                 let body = match name.as_str() {
                     "help" => HELP.to_string(),
                     "models" => render_models(workspace),
+                    "connect" => render_connect_list(),
                     "clear" => {
                         app.clear_transcript();
                         continue;
@@ -396,6 +410,7 @@ async fn interactive(
 const COMMANDS: &[(&str, &str)] = &[
     ("/help", "show the key reference"),
     ("/models", "list configured models"),
+    ("/connect", "set up a provider"),
     ("/clear", "clear the transcript"),
     ("/exit", "quit octane"),
 ];
@@ -469,6 +484,81 @@ fn render_models(workspace: &Utf8PathBuf) -> String {
 fn list_models(workspace: &Utf8PathBuf) -> Result<()> {
     print!("{}", render_models(workspace));
     Ok(())
+}
+
+/// Set up a provider, or list what can be set up.
+fn connect(workspace: &Utf8PathBuf, provider: Option<&str>, user_scope: bool) -> Result<()> {
+    use octane_provider::connect as setup;
+
+    let Some(key) = provider else {
+        print!("{}", render_connect_list());
+        return Ok(());
+    };
+
+    let recipe = setup::recipe(key).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown provider {key:?}. Run `octane connect` to see what is available."
+        )
+    })?;
+
+    let root = if user_scope {
+        std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".octane")
+    } else {
+        workspace.join(".octane").into_std_path_buf()
+    };
+
+    let config = setup::build_config(&recipe);
+    let path = setup::write_config(&root, &recipe, &config)?;
+
+    println!("Wrote {}", path.display());
+    println!();
+    for (key, model) in &config.models {
+        println!("  {}/{key:<12} {}", recipe.key, model.name.as_deref().unwrap_or(""));
+    }
+
+    // The credential is a ${VAR} reference, so the file is safe to commit and
+    // the secret stays in the environment. Say so, or people paste keys in.
+    if let Some(variable) = recipe.credential.env_var() {
+        println!();
+        if setup::is_satisfied(&recipe, |name| std::env::var(name).ok()) {
+            println!("  {variable} is set.");
+        } else {
+            println!("  Set {variable} to finish:");
+            println!("    export {variable}=...        # {}", recipe.help_url);
+            println!();
+            println!("  The file references the variable rather than storing the key,");
+            println!("  so it is safe to commit.");
+        }
+    }
+    if let Some(note) = recipe.note {
+        println!();
+        println!("  Note: {note}");
+    }
+    Ok(())
+}
+
+/// The provider menu, shared by `octane connect` and `/connect`.
+fn render_connect_list() -> String {
+    use octane_provider::connect as setup;
+
+    let mut out = String::from("Providers octane can set up:\n\n");
+    for recipe in setup::recipes() {
+        let state = match &recipe.credential {
+            octane_provider::Credential::None => "ready".to_string(),
+            octane_provider::Credential::TokenFile => "needs a token file".to_string(),
+            octane_provider::Credential::ApiKey { env_var } => {
+                if setup::is_satisfied(&recipe, |name| std::env::var(name).ok()) {
+                    format!("{env_var} is set")
+                } else {
+                    format!("needs {env_var}")
+                }
+            }
+        };
+        out.push_str(&format!("  {:<12} {:<22} {state}\n", recipe.key, recipe.name));
+    }
+    out.push_str("\n  octane connect <name>          write .octane/providers/<name>.json\n");
+    out.push_str("  octane connect <name> --user   write it to ~/.octane instead\n");
+    out
 }
 
 const EXAMPLE_PROVIDER: &str = r#"{

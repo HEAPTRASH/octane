@@ -174,6 +174,16 @@ impl Auth {
 
     /// Expand `${VAR}` references in whatever this variant carries.
     pub fn resolve_env(self, provider: &str) -> Result<Self, ConfigError> {
+        self.resolve_env_with(provider, |name| std::env::var(name).ok())
+    }
+
+    /// As [`Auth::resolve_env`], against an arbitrary lookup.
+    pub fn resolve_env_with(
+        self,
+        provider: &str,
+        lookup: impl Fn(&str) -> Option<String> + Copy,
+    ) -> Result<Self, ConfigError> {
+        let resolve_env = |value: &str, provider: &str| resolve_env_with(value, provider, lookup);
         Ok(match self {
             Self::ApiKey { value, header, prefix } => Self::ApiKey {
                 value: resolve_env(&value, provider)?,
@@ -371,8 +381,22 @@ pub enum ConfigError {
 }
 
 impl ProviderConfig {
-    /// Resolve one model.
+    /// Resolve one model against the process environment.
     pub fn resolve(&self, provider: &str, key: &str) -> Result<ResolvedModel, ConfigError> {
+        self.resolve_with(provider, key, |name| std::env::var(name).ok())
+    }
+
+    /// Resolve one model against an arbitrary environment.
+    ///
+    /// Injected for the same reason as [`resolve_env_with`]: so this is testable
+    /// without mutating shared process state, which `forbid(unsafe_code)` rules
+    /// out anyway.
+    pub fn resolve_with(
+        &self,
+        provider: &str,
+        key: &str,
+        lookup: impl Fn(&str) -> Option<String> + Copy,
+    ) -> Result<ResolvedModel, ConfigError> {
         let entry = self.models.get(key).ok_or_else(|| {
             ConfigError::UnknownModel(format!("{provider}/{key}"))
         })?;
@@ -397,7 +421,7 @@ impl ProviderConfig {
         let mut headers = self.headers.clone();
         headers.extend(entry.headers.clone());
         for value in headers.values_mut() {
-            *value = resolve_env(value, provider)?;
+            *value = resolve_env_with(value, provider, lookup)?;
         }
 
         // Body merges recursively, so a model can override one nested key
@@ -412,7 +436,7 @@ impl ProviderConfig {
             .auth
             .clone()
             .unwrap_or_else(|| self.auth.clone())
-            .resolve_env(provider)?;
+            .resolve_env_with(provider, lookup)?;
 
         Ok(ResolvedModel {
             provider: provider.to_string(),
@@ -439,12 +463,22 @@ impl ProviderConfig {
         })
     }
 
+    /// Resolve the model bound to a role, against the process environment.
+    pub fn resolve_role(&self, provider: &str, role: Role) -> Result<ResolvedModel, ConfigError> {
+        self.resolve_role_with(provider, role, |name| std::env::var(name).ok())
+    }
+
     /// Resolve the model bound to a role.
     ///
     /// Falls back to the sole model when only one is declared, and otherwise to
     /// the primary binding — so a single-model provider needs no `defaults` block
     /// and a provider that names only a primary still answers for `faster`.
-    pub fn resolve_role(&self, provider: &str, role: Role) -> Result<ResolvedModel, ConfigError> {
+    pub fn resolve_role_with(
+        &self,
+        provider: &str,
+        role: Role,
+        lookup: impl Fn(&str) -> Option<String> + Copy,
+    ) -> Result<ResolvedModel, ConfigError> {
         if self.models.is_empty() {
             return Err(ConfigError::NoModels { provider: provider.into() });
         }
@@ -473,7 +507,7 @@ impl ProviderConfig {
             None => self.models.keys().next().expect("non-empty").clone(),
         };
 
-        self.resolve(provider, &key)
+        self.resolve_with(provider, &key, lookup)
     }
 
     /// Every model this provider declares, resolved.

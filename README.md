@@ -86,10 +86,14 @@ Glyphs are chosen for **width safety**, not just availability. A character that 
 One JSON file per **provider**, declaring a connection and every model reachable through it. Dropped in `~/.octane/providers/*.json` or `.octane/providers/*.json`, filename as the provider key, project files winning over user files.
 
 ```bash
+octane connect                   # what can be set up
+octane connect openrouter        # writes .octane/providers/openrouter.json
 octane models                    # what is configured, and what is not
 octane --model corp/claude       # provider/model
 octane --model sonnet            # bare key, when unambiguous
 ```
+
+`/connect` and `/models` do the same from inside the TUI.
 
 The format follows [Junie's custom-LLM profiles](https://junie.jetbrains.com/docs/custom-llm-models.html) for `${VAR}` references and merge semantics, and catwalk's `models` map so one file covers many models rather than Junie's file-per-model.
 
@@ -119,6 +123,12 @@ Four wire formats cover essentially everything (`RESEARCH.md` §L): `openai-comp
 
 Worked examples in [`examples/providers/`](examples/providers/).
 
+### Subscription sign-in
+
+octane does not implement Claude Pro/Max or ChatGPT subscription auth, and this is a deliberate limit rather than a gap (`RESEARCH.md` §P–R). Anthropic sent legal demands to opencode over exactly that in March 2026 and began blocking third-party OAuth in April; OpenAI documents the flow only for its own clients, where the practical route is reusing their client ID — impersonation, not integration.
+
+What is offered instead: API keys everywhere, and `tokenFile` for a token minted out of band. If a provider sanctions third-party subscription access, it becomes a provider file rather than a code change. octane ships the protocol; the user supplies the client identity.
+
 ## The two layers that are easy to conflate
 
 **Policy** (`octane-permission`) asks *should this be allowed?* and runs before a command does.
@@ -146,7 +156,7 @@ Both are needed. Policy alone trusts that `make test` does what its name suggest
 ## Testing
 
 ```bash
-cargo test --workspace       # 469 tests
+cargo test --workspace       # 567 tests
 cargo clippy --workspace --all-targets
 python3 scripts/tui-smoke.py # drives the real TUI through a pty
 ```

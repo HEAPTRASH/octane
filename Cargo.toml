@@ -51,6 +51,13 @@ ignore = "0.4"
 globset = "0.4"
 regex = "1"
 
+# http: rustls rather than native-tls, so there is no OpenSSL to find at build
+# time and no system dependency to explain to anyone.
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "charset", "http2"] }
+bytes = "1"
+async-stream = "0.3"
+url = "2"
+
 # misc
 uuid = { version = "1", features = ["v7", "serde"] }
 jiff = { version = "0.2", features = ["serde"] }
