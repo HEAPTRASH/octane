@@ -19,3 +19,6 @@
 
 # research cache (Firecrawl scrapes)
 /.firecrawl/
+
+# macOS
+.DS_Store
