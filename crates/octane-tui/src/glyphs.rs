@@ -43,6 +43,10 @@ pub struct Glyphs {
     pub question: &'static str,
     /// Marks a system notice.
     pub notice: &'static str,
+    /// Filled radio, for the value currently in effect.
+    pub radio_on: &'static str,
+    /// Empty radio, for an alternative.
+    pub radio_off: &'static str,
     /// Marks a call that succeeded.
     ///
     /// Exists so status is not carried by colour alone. U+2713 is text
@@ -83,6 +87,8 @@ pub const UNICODE: Glyphs = Glyphs {
     error: "\u{2717}",    // ✗ ballot X — text presentation, unlike ✘
     question: "\u{25c6}", // ◆ black diamond
     notice: "\u{00b7}",   // · middle dot
+    radio_on: "\u{25cf}",  // ● black circle, reused from `tool`
+    radio_off: "\u{25cb}", // ○ white circle, same block and width
     ok: "\u{2713}",       // ✓ check mark, text presentation
 
     rule: "\u{2500}",      // ─
@@ -121,6 +127,8 @@ pub const ASCII: Glyphs = Glyphs {
     error: "x",
     question: "?",
     notice: "-",
+    radio_on: "*",
+    radio_off: "-",
     ok: "v",
 
     rule: "-",
@@ -221,7 +229,7 @@ mod tests {
             for glyph in [
                 set.prompt, set.tool, set.edit, set.error, set.question, set.notice, set.rule,
                 set.separator, set.arrow_up, set.arrow_down, set.claw, set.bullet, set.bar,
-                set.ok,
+                set.ok, set.radio_on, set.radio_off,
             ] {
                 assert!(single_width(glyph), "{glyph:?} must be one cell");
             }
@@ -240,7 +248,7 @@ mod tests {
         // U+2600-U+27BF default to emoji presentation. Staying below U+2900
         // keeps every glyph unambiguously narrow.
         for set in [UNICODE, ASCII] {
-            for glyph in [set.prompt, set.tool, set.edit, set.error, set.question, set.claw, set.ok] {
+            for glyph in [set.prompt, set.tool, set.edit, set.error, set.question, set.claw, set.ok, set.radio_on, set.radio_off] {
                 for ch in glyph.chars() {
                     assert!(
                         (ch as u32) < 0x2900,

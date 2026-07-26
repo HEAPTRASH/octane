@@ -38,9 +38,10 @@ def main() -> int:
         os.environ["TERM"] = "xterm-256color"
         os.environ["COLORTERM"] = "truecolor"
         os.environ["LANG"] = "en_US.UTF-8"
-        # The sweep would otherwise dominate the startup byte count and make the
-        # idle measurement below meaningless.
-        os.environ["OCTANE_NO_ANIMATION"] = "1"
+        # Deliberately NOT disabling motion here. This script is the only
+        # thing that measures whether a transient effect settles, and a test
+        # that switches off the feature it polices proves nothing. The sweep it
+        # was written for no longer exists.
         os.execv(binary, [binary])
 
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -105,6 +106,20 @@ def main() -> int:
     pump(0.5)
     send(b"\x15")  # ctrl+u, clear
     pump(0.5)
+
+    # Motion must SETTLE, not merely be absent. A state change should produce
+    # bytes and then stop; an effect that never stops passes an idle-only check
+    # if the idle window happens to start after it, and an effect that never
+    # ran passes it always.
+    send(b"\x1b[Z")  # shift+tab: a state change with a visible consequence
+    during = pump(0.4)
+    after = pump(2.5)
+    print(f"motion during change {during:>7} bytes / 0.4s")
+    print(f"motion after settle  {after:>7} bytes / 2.5s")
+    if during == 0:
+        failures.append("a state change produced no output at all")
+    if after > IDLE_BUDGET_BYTES:
+        failures.append(f"motion did not settle ({after} bytes after 2.5s)")
 
     idle_after = pump(4.0)
     print(f"idle after activity  {idle_after:>7} bytes / 4s")

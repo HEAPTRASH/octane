@@ -50,6 +50,8 @@ pub enum KeyAction {
     /// Choose the highlighted row.
     PickerChoose,
     PickerCancel,
+    /// Up one level, without the filter-clearing step Esc does first.
+    PickerAscend,
     /// Narrow the picker.
     PickerFilter(char),
     PickerUnfilter,
@@ -105,6 +107,11 @@ pub fn route(key: KeyEvent, ctx: &KeyContext<'_>) -> KeyAction {
             KeyCode::Up => KeyAction::PickerPrevious,
             KeyCode::Down => KeyAction::PickerNext,
             KeyCode::Enter | KeyCode::Tab => KeyAction::PickerChoose,
+            // Right descends, Left ascends. Free here in a way they are not in
+            // a text field: the picker's filter only appends and truncates, so
+            // there is no cursor for them to move.
+            KeyCode::Right => KeyAction::PickerChoose,
+            KeyCode::Left => KeyAction::PickerAscend,
             KeyCode::Esc => KeyAction::PickerCancel,
             KeyCode::Backspace => KeyAction::PickerUnfilter,
             // Ctrl+C still exits: a modal that traps the user is a bug.

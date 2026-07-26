@@ -959,9 +959,14 @@ fn setting_value_picker(
         .iter()
         .map(|choice| {
             let display = choice.value.display();
-            let mut item = PickerItem::new(&display, &choice.label).detail(&choice.detail);
-            if display == current {
-                item = item.state(if configured { "current" } else { "current (default)" });
+            // The radio says which is in effect; the state column only adds
+            // the part a glyph cannot, which is whether it was chosen or
+            // inherited.
+            let chosen = display == current;
+            let mut item =
+                PickerItem::new(&display, &choice.label).detail(&choice.detail).radio(chosen);
+            if chosen && !configured {
+                item = item.state("default");
             }
             item
         })

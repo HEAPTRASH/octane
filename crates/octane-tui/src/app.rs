@@ -713,6 +713,16 @@ impl App {
             // most recent narrowing, then the level, then the overlay. Losing
             // a hard-won position in a long list to one mistyped character and
             // a reflexive Esc is the failure this prevents.
+            // Left is unambiguous: it always means "up". Esc is layered and
+            // clears a filter first, which is what the user wants from Esc and
+            // not what they want from an arrow.
+            KeyAction::PickerAscend => {
+                if self.pickers.len() > 1 {
+                    self.pickers.pop();
+                }
+                None
+            }
+
             KeyAction::PickerCancel => {
                 match self.pickers.last_mut() {
                     Some(picker) if !picker.filter().is_empty() => picker.clear_filter(),
@@ -1088,10 +1098,38 @@ fn picker_widget<'a>(
             Style::default().fg(theme.assistant)
         };
 
-        let mut spans = vec![
-            Span::styled(format!("{marker} "), Style::default().fg(theme.accent)),
-            Span::styled(format!("{:<column$}", item.label), label_style),
-        ];
+        // Underlined, not bold: the selected row is already bold, so a bold
+        // span inside it is invisible on exactly the row being looked at.
+        let label = {
+            let padded = format!("{:<column$}", item.label);
+            match picker.match_span(item) {
+                Some((start, len)) => {
+                    let chars: Vec<char> = padded.chars().collect();
+                    let cut = |a: usize, b: usize| chars[a.min(chars.len())..b.min(chars.len())]
+                        .iter()
+                        .collect::<String>();
+                    vec![
+                        Span::styled(cut(0, start), label_style),
+                        Span::styled(
+                            cut(start, start + len),
+                            label_style.add_modifier(ratatui::style::Modifier::UNDERLINED),
+                        ),
+                        Span::styled(cut(start + len, chars.len()), label_style),
+                    ]
+                }
+                None => vec![Span::styled(padded, label_style)],
+            }
+        };
+
+        let mut spans = vec![Span::styled(format!("{marker} "), Style::default().fg(theme.accent))];
+        if let Some(chosen) = item.selected_value {
+            let glyph = if chosen { glyphs.radio_on } else { glyphs.radio_off };
+            spans.push(Span::styled(
+                format!("{glyph} "),
+                if chosen { Style::default().fg(theme.accent) } else { theme.dim() },
+            ));
+        }
+        spans.extend(label);
         if let Some(state) = &item.state {
             // The state is why a row is or is not usable, so it earns colour.
             let style = if item.enabled { theme.dim() } else { theme.label(theme.warning) };

@@ -32,6 +32,12 @@ pub struct PickerItem {
     pub detail: String,
     /// Right-hand status, e.g. "needs OPENROUTER_API_KEY".
     pub state: Option<String>,
+    /// Marks the value currently in effect, for a list of alternatives.
+    ///
+    /// A glyph rather than the word "current" in the state column: which one is
+    /// set should be legible with every colour off and without reading prose,
+    /// and a radio column answers "what are my options" at a glance.
+    pub selected_value: Option<bool>,
     /// A disabled item is shown but cannot be chosen — it is usually the one
     /// the user most needs to see, with the reason next to it.
     pub enabled: bool,
@@ -44,12 +50,19 @@ impl PickerItem {
             label: label.into(),
             detail: String::new(),
             state: None,
+            selected_value: None,
             enabled: true,
         }
     }
 
     pub fn detail(mut self, detail: impl Into<String>) -> Self {
         self.detail = detail.into();
+        self
+    }
+
+    /// Mark this row as the value in effect, or as an alternative to it.
+    pub fn radio(mut self, chosen: bool) -> Self {
+        self.selected_value = Some(chosen);
         self
     }
 
@@ -98,6 +111,27 @@ impl Picker {
                     || item.label.to_lowercase().contains(&needle)
             })
             .collect()
+    }
+
+    /// Where the filter matched inside a row's label, as a char range.
+    ///
+    /// A subsequence match looks like a bug without this: nothing explains why
+    /// `router` returned `OpenRouter`. Matching is `contains`, so every hit is
+    /// one contiguous range and this is recoverable in the same pass rather
+    /// than needing an index set.
+    ///
+    /// `None` when the filter matched the key but not the visible label, since
+    /// there is nothing on screen to underline.
+    pub fn match_span(&self, item: &PickerItem) -> Option<(usize, usize)> {
+        if self.filter.is_empty() {
+            return None;
+        }
+        let needle = self.filter.to_lowercase();
+        let haystack = item.label.to_lowercase();
+        let byte_start = haystack.find(&needle)?;
+        // Char offsets, because the renderer slices by character.
+        let start = haystack[..byte_start].chars().count();
+        Some((start, needle.chars().count()))
     }
 
     pub fn selected(&self) -> usize {
@@ -320,5 +354,52 @@ mod tests {
         }
         assert_eq!(picker.len(), total, "filtering must not change the total");
         assert_eq!(picker.matches().len(), 1);
+    }
+
+    #[test]
+    fn the_match_span_explains_a_surprising_hit() {
+        // `router` returning `OpenRouter` looks like a bug until the matched
+        // characters are marked. The span is over the LABEL, since that is what
+        // is on screen.
+        let mut picker = picker();
+        for ch in "router".chars() {
+            picker.push_filter(ch);
+        }
+        let item = picker.matches()[0];
+        assert_eq!(item.label, "OpenRouter");
+        assert_eq!(picker.match_span(item), Some((4, 6)));
+    }
+
+    #[test]
+    fn a_key_only_match_underlines_nothing() {
+        // Filtering matches key or label. When only the key matched there is
+        // nothing visible to mark, and inventing a span would point at the
+        // wrong characters.
+        let picker = Picker::new(
+            PickerKind::Provider,
+            "Pick",
+            vec![PickerItem::new("openrouter", "A Different Label")],
+        );
+        let mut picker = picker;
+        for ch in "router".chars() {
+            picker.push_filter(ch);
+        }
+        assert_eq!(picker.matches().len(), 1, "it still matches on the key");
+        assert_eq!(picker.match_span(picker.matches()[0]), None);
+    }
+
+    #[test]
+    fn the_span_is_measured_in_characters_not_bytes() {
+        // The renderer slices by character, so a byte offset would cut a
+        // multi-byte label in the wrong place or panic.
+        let mut picker = Picker::new(
+            PickerKind::Provider,
+            "Pick",
+            vec![PickerItem::new("k", "ünicode match")],
+        );
+        for ch in "match".chars() {
+            picker.push_filter(ch);
+        }
+        assert_eq!(picker.match_span(picker.matches()[0]), Some((8, 5)));
     }
 }
