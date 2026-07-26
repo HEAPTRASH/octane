@@ -407,6 +407,7 @@ impl TurnRunner {
                             title: outcome.title.clone(),
                             metadata: outcome.metadata.clone(),
                             is_error: false,
+                            body: outcome.output.clone(),
                         });
                         interactions.push((call.name.clone(), call.input.clone(), outcome.output.clone()));
                         result_parts.push(Part::ToolResult(ToolResult {

@@ -150,11 +150,29 @@ impl Tool for EditTool {
             if parsed.replace_all && occurrences != 1 { "s" } else { "" }
         );
 
+        // The replaced pair is the diff, exactly, with no algorithm needed:
+        // this tool's whole contract is "`old` became `new`". Capped because a
+        // replacement can be a whole file and the UI is not the model's copy.
         Ok(ToolOutcome::new(resolved.display.clone(), summary).with_metadata(serde_json::json!({
             "path": resolved.absolute,
             "replacements": if parsed.replace_all { occurrences } else { 1 },
+            "removed": clip(&parsed.old, DIFF_LINE_CAP),
+            "added": clip(&parsed.new, DIFF_LINE_CAP),
         })))
     }
+}
+
+/// Lines of each side of a replacement kept for display.
+const DIFF_LINE_CAP: usize = 200;
+
+/// First `cap` lines, with a marker when there are more.
+fn clip(text: &str, cap: usize) -> String {
+    let mut out: Vec<&str> = text.lines().take(cap).collect();
+    let total = text.lines().count();
+    if total > cap {
+        out.push("...");
+    }
+    out.join("\n")
 }
 
 /// Explain a failed match in terms the model can act on.

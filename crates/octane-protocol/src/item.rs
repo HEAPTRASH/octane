@@ -29,8 +29,15 @@ pub enum ItemKind {
         name: String,
         /// The tool's own one-line description of what it did.
         title: String,
-        /// Structured detail: line counts, exit codes, match counts.
+        /// Structured detail: line counts, exit codes, match counts, and for
+        /// `edit` and `write` the content a client may want to show.
         metadata: Option<serde_json::Value>,
+        /// The tool's own output, for clients that show some of it.
+        ///
+        /// Carried rather than rendered wholesale: a client decides how much of
+        /// it a reader wants, which differs per tool. Publishing it verbatim is
+        /// what buried the transcript under file bodies before.
+        body: String,
         is_error: bool,
     },
     /// A file write the agent wants to make, held for review.

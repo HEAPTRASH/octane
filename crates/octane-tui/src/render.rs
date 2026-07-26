@@ -166,7 +166,7 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
             lines
         }
 
-        ItemKind::ToolResult { name, title, metadata, is_error, .. } => {
+        ItemKind::ToolResult { name, title, metadata, is_error, body, .. } => {
             // Indented under the call it answers, so the pairing is structural
             // rather than a matter of colour. The marker differs on failure for
             // the same reason: a red line is invisible to a reader who cannot
@@ -181,7 +181,7 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
             // `bash` the title is the path or the description, which the call
             // line above already shows, so printing both says the same thing
             // twice on consecutive rows.
-            let body = match summarize_result(name, metadata.as_ref()) {
+            let summary = match summarize_result(name, metadata.as_ref()) {
                 Some(detail) => detail,
                 None => title.clone(),
             };
@@ -189,11 +189,14 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
             // Named, because a step with several calls streams all of them
             // before any result: the rows do not sit under the call they
             // answer, so each has to say which one it is.
-            vec![Line::from(vec![
+            let mut lines = vec![Line::from(vec![
                 Span::styled(format!("  {marker} "), Style::default().fg(colour)),
                 Span::styled(format!("{name}  "), theme.dim()),
-                Span::styled(body, theme.dim()),
-            ])]
+                Span::styled(summary, theme.dim()),
+            ])];
+
+            lines.extend(result_body(name, metadata.as_ref(), body, theme, glyphs));
+            lines
         }
 
         ItemKind::Diff { path, unified } => {
@@ -249,6 +252,88 @@ pub fn render_diff(unified: &str, theme: &Theme) -> Vec<Line<'static>> {
 ///
 /// Reaches into the arguments per tool because a generic JSON dump is unreadable
 /// at a glance, and the point of the collapsed line is to be readable at a glance.
+/// Lines of output shown for a tool that is not `edit` or `write`.
+const OUTPUT_PREVIEW_LINES: usize = 8;
+
+/// What to show under a tool result, which differs by tool.
+///
+/// `edit` shows the whole change, because a change is the one thing a reader
+/// has to be able to check, and a summary of it is unverifiable. `write` shows
+/// what it wrote, for the same reason. Everything else is a lookup whose value
+/// is in the answer rather than the transcript, so it gets a preview and a
+/// count of what was left out.
+fn result_body(
+    name: &str,
+    metadata: Option<&serde_json::Value>,
+    output: &str,
+    theme: &Theme,
+    glyphs: &crate::glyphs::Glyphs,
+) -> Vec<Line<'static>> {
+    let text = |key: &str| {
+        metadata.and_then(|m| m.get(key)).and_then(|v| v.as_str()).unwrap_or_default().to_string()
+    };
+
+    match name {
+        "edit" => {
+            let (removed, added) = (text("removed"), text("added"));
+            if removed.is_empty() && added.is_empty() {
+                return Vec::new();
+            }
+            let mut lines = Vec::new();
+            // Marked with - and +, not by colour: a red line and a green line
+            // are the same line under NO_COLOR, and the two hues octane uses
+            // for them are close under deuteranopia.
+            for line in removed.lines() {
+                lines.push(Line::styled(
+                    format!("      - {}", sanitize(line)),
+                    Style::default().fg(theme.error),
+                ));
+            }
+            for line in added.lines() {
+                lines.push(Line::styled(
+                    format!("      + {}", sanitize(line)),
+                    Style::default().fg(theme.success),
+                ));
+            }
+            lines
+        }
+
+        "write" => text("content")
+            .lines()
+            .map(|line| {
+                Line::styled(
+                    format!("      {} {}", glyphs.bar, sanitize(line)),
+                    theme.dim(),
+                )
+            })
+            .collect(),
+
+        _ => {
+            // A tool that publishes a `preview` has already stripped the
+            // framing its output carries for the model: `read` wraps its body
+            // in `<file path=...>`, which is addressed to the model and is
+            // noise on screen.
+            let source = match text("preview") {
+                preview if !preview.is_empty() => preview,
+                _ => output.to_string(),
+            };
+            let total = source.lines().count();
+            let mut lines: Vec<Line<'static>> = source
+                .lines()
+                .take(OUTPUT_PREVIEW_LINES)
+                .map(|line| Line::styled(format!("      {}", sanitize(line)), theme.dim()))
+                .collect();
+            if total > OUTPUT_PREVIEW_LINES {
+                lines.push(Line::styled(
+                    format!("      [+ {} more lines]", total - OUTPUT_PREVIEW_LINES),
+                    theme.dim(),
+                ));
+            }
+            lines
+        }
+    }
+}
+
 /// A short, human-facing account of what a tool produced.
 ///
 /// Reads the metadata the tool already reports rather than measuring its
@@ -272,7 +357,9 @@ pub fn summarize_result(tool: &str, metadata: Option<&serde_json::Value>) -> Opt
             // question a collapsed line has to answer on its own.
             Some(if code == 0 { "exit 0".into() } else { format!("exit {code}") })
         }
-        "write" | "edit" => number("lines").map(|lines| format!("{lines} lines")),
+        "write" => number("lines").map(|lines| format!("{lines} lines")),
+        "edit" => number("replacements")
+            .map(|n| if n == 1 { "1 replacement".into() } else { format!("{n} replacements") }),
         _ => None,
     }
 }
@@ -289,7 +376,10 @@ fn sanitized(kind: &ItemKind) -> ItemKind {
         | ItemKind::Reasoning { text } => *text = sanitize(text),
         ItemKind::Error { message } => *message = sanitize(message),
         ItemKind::ToolExecution { input, .. } => *input = sanitize(input),
-        ItemKind::ToolResult { title, .. } => *title = sanitize(title),
+        ItemKind::ToolResult { title, body, .. } => {
+            *title = sanitize(title);
+            *body = sanitize(body);
+        }
         ItemKind::Diff { unified, path } => {
             *unified = sanitize(unified);
             *path = sanitize(path);
@@ -696,6 +786,7 @@ mod tests {
             title: "flake.nix".into(),
             metadata: Some(serde_json::json!({ "lines_total": 62, "lines_shown": 62 })),
             is_error: false,
+            body: String::new(),
         });
         let rendered = text_of(&render(&event));
 
@@ -716,6 +807,7 @@ mod tests {
             title: "run the tests".into(),
             metadata: Some(serde_json::json!({ "exit_code": 101 })),
             is_error: true,
+            body: String::new(),
         });
         let ok = completed(ItemKind::ToolResult {
             call_id: octane_protocol::ToolCallId::new(),
@@ -723,6 +815,7 @@ mod tests {
             title: "run the tests".into(),
             metadata: Some(serde_json::json!({ "exit_code": 0 })),
             is_error: false,
+            body: String::new(),
         });
 
         let failed = text_of(&render(&failed));
@@ -765,5 +858,73 @@ mod tests {
         assert_ne!(marker(&completed), marker(&failed));
         assert_ne!(marker(&completed), marker(&canceled));
         assert_ne!(marker(&failed), marker(&canceled));
+    }
+
+    fn tool_result(name: &str, metadata: serde_json::Value, body: &str) -> Event {
+        completed(ItemKind::ToolResult {
+            call_id: octane_protocol::ToolCallId::new(),
+            name: name.into(),
+            title: "t".into(),
+            metadata: Some(metadata),
+            is_error: false,
+            body: body.into(),
+        })
+    }
+
+    #[test]
+    fn an_edit_shows_both_sides_of_the_change() {
+        // A change is the one thing a reader has to be able to check, and a
+        // summary of it is unverifiable. The pair is exact rather than
+        // reconstructed: the tool's contract is that `old` became `new`.
+        let event = tool_result(
+            "edit",
+            serde_json::json!({ "removed": "let a = 1;", "added": "let a = 2;" }),
+            "",
+        );
+        let rendered = text_of(&render(&event));
+        assert!(rendered.contains("- let a = 1;"));
+        assert!(rendered.contains("+ let a = 2;"));
+    }
+
+    #[test]
+    fn a_diff_is_marked_without_relying_on_colour() {
+        // Red and green are the same line under NO_COLOR, and octane's two
+        // hues are close under deuteranopia.
+        let event = tool_result(
+            "edit",
+            serde_json::json!({ "removed": "old", "added": "new" }),
+            "",
+        );
+        let rendered = text_of(&render(&event));
+        assert!(rendered.lines().any(|l| l.trim_start().starts_with("- ")));
+        assert!(rendered.lines().any(|l| l.trim_start().starts_with("+ ")));
+    }
+
+    #[test]
+    fn other_tools_are_truncated_and_say_how_much_was_left() {
+        // A lookup's value is in the answer, not in the transcript. Silent
+        // truncation reads as a short result rather than a clipped one.
+        let body = (1..=30).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        let event = tool_result("grep", serde_json::json!({}), &body);
+        let rendered = text_of(&render(&event));
+
+        assert!(rendered.contains("line 1"));
+        assert!(!rendered.contains("line 30"), "it must not print everything");
+        assert!(rendered.contains("[+ 22 more lines]"));
+    }
+
+    #[test]
+    fn a_read_preview_does_not_show_the_model_facing_framing() {
+        // `read` wraps its output in `<file path=...>` for the model. A tool
+        // that publishes a preview has already stripped that, so the preview
+        // wins over the raw output.
+        let event = tool_result(
+            "read",
+            serde_json::json!({ "preview": "fn main() {}" }),
+            "<file path=\"a.rs\">\nfn main() {}\n</file>",
+        );
+        let rendered = text_of(&render(&event));
+        assert!(rendered.contains("fn main()"));
+        assert!(!rendered.contains("<file"), "framing must not reach the screen");
     }
 }

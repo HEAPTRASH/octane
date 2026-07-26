@@ -133,6 +133,7 @@ impl Tool for WriteTool {
             "path": resolved.absolute,
             "created": !existed,
             "lines": new_lines,
+            "content": parsed.content.clone(),
         })))
     }
 }
