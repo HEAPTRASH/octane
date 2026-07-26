@@ -106,7 +106,13 @@ pub struct App {
     /// reasoning rather than prose.
     streaming: Option<(octane_protocol::ItemId, String, bool)>,
     /// An open selection overlay.
-    picker: Option<crate::picker::Picker>,
+    /// Open pickers, innermost last.
+    ///
+    /// A stack rather than one slot, because `/settings` opens a value picker
+    /// from a setting picker: with a single slot the first is destroyed the
+    /// moment the second opens, so there is nothing to go back to and Esc can
+    /// only abandon the whole flow.
+    pickers: Vec<crate::picker::Picker>,
 }
 
 impl std::fmt::Debug for App {
@@ -167,7 +173,7 @@ impl App {
             conversing: false,
             dirty: true,
             streaming: None,
-            picker: None,
+            pickers: Vec::new(),
         })
     }
 
@@ -311,8 +317,19 @@ impl App {
     }
 
     /// Open a selection overlay.
+    /// Close every open picker.
+    ///
+    /// For a choice that ends the flow. A choice that opens a further level
+    /// calls [`Self::set_picker`] instead, which pushes.
+    pub fn close_pickers(&mut self) {
+        if !self.pickers.is_empty() {
+            self.pickers.clear();
+            self.dirty = true;
+        }
+    }
+
     pub fn set_picker(&mut self, picker: crate::picker::Picker) {
-        self.picker = Some(picker);
+        self.pickers.push(picker);
         self.dirty = true;
     }
 
@@ -339,7 +356,7 @@ impl App {
         let theme = self.options.theme;
         let glyphs = self.glyphs;
         let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
-        let picker_state = self.picker.clone();
+        let picker_state = self.pickers.clone();
         let workspace = self.workspace.clone();
         let sandboxed = self.sandboxed;
 
@@ -447,10 +464,10 @@ impl App {
 
             frame.render_widget(status_paragraph(&status, &theme, &glyphs), chunks[5]);
 
-            if let Some(picker) = &picker_state {
+            if let Some(picker) = picker_state.last() {
                 let area = centred(frame.area(), 66, picker_height(picker));
                 frame.render_widget(Clear, area);
-                frame.render_widget(picker_widget(picker, &theme, &glyphs), area);
+                frame.render_widget(picker_widget(&picker_state, &theme, &glyphs), area);
             }
 
             // The popup floats above the composer, so it never displaces the
@@ -540,7 +557,7 @@ impl App {
                 completing: self.completion.is_active() && !self.completion.is_exhausted(),
                 on_first_line: self.composer.cursor_position().0 == 0,
                 ends_with_continuation: self.composer.ends_with_continuation(),
-                picking: self.picker.is_some(),
+                picking: !self.pickers.is_empty(),
             };
             keymap::route(key, &ctx)
         };
@@ -662,42 +679,54 @@ impl App {
             KeyAction::Exit => Some(AppEvent::Exit),
 
             KeyAction::PickerNext => {
-                if let Some(picker) = self.picker.as_mut() {
+                if let Some(picker) = self.pickers.last_mut() {
                     picker.select_next();
                 }
                 None
             }
             KeyAction::PickerPrevious => {
-                if let Some(picker) = self.picker.as_mut() {
+                if let Some(picker) = self.pickers.last_mut() {
                     picker.select_previous();
                 }
                 None
             }
             KeyAction::PickerFilter(ch) => {
-                if let Some(picker) = self.picker.as_mut() {
+                if let Some(picker) = self.pickers.last_mut() {
                     picker.push_filter(ch);
                 }
                 None
             }
             KeyAction::PickerUnfilter => {
-                if let Some(picker) = self.picker.as_mut() {
+                if let Some(picker) = self.pickers.last_mut() {
                     picker.pop_filter();
                 }
                 None
             }
+            // Layered, in the order a user undoes things: the filter is the
+            // most recent narrowing, then the level, then the overlay. Losing
+            // a hard-won position in a long list to one mistyped character and
+            // a reflexive Esc is the failure this prevents.
             KeyAction::PickerCancel => {
-                self.picker = None;
+                match self.pickers.last_mut() {
+                    Some(picker) if !picker.filter().is_empty() => picker.clear_filter(),
+                    _ => {
+                        self.pickers.pop();
+                    }
+                }
                 None
             }
             KeyAction::PickerChoose => {
                 let chosen = self
-                    .picker
-                    .as_ref()
+                    .pickers
+                    .last()
                     .and_then(|picker| picker.choose().map(ToString::to_string));
                 match chosen {
                     Some(key) => {
-                        let kind = self.picker.as_ref().map(|picker| picker.kind.clone());
-                        self.picker = None;
+                        // The stack is left standing. A choice may open another
+                        // level, and the caller is the only thing that knows
+                        // which: closing here would throw away the parent the
+                        // user needs to go back to.
+                        let kind = self.pickers.last().map(|picker| picker.kind.clone());
                         kind.map(|kind| AppEvent::Picked { kind, key })
                     }
                     // A disabled row keeps the overlay open rather than
@@ -955,8 +984,12 @@ fn is_reasoning(kind: &octane_protocol::ItemKind) -> bool {
 
 /// Rows a picker needs: border, title, filter, and its visible rows.
 fn picker_height(picker: &crate::picker::Picker) -> u16 {
-    let rows = picker.visible().0.len().max(1);
-    u16::try_from(rows).unwrap_or(10) + 4
+    // rows + two borders + the filter line + a blank + a blank + the hints.
+    // An empty result is two body lines, not one: the echoed query and the way
+    // out. Undercounting here silently clips the hint line, which is the line
+    // that says what Esc will do.
+    let rows = if picker.is_empty() { 2 } else { picker.visible().0.len() };
+    u16::try_from(rows).unwrap_or(10) + 6
 }
 
 /// A box of the given width and height, centred in `area`.
@@ -974,11 +1007,13 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
 }
 
 fn picker_widget<'a>(
-    picker: &crate::picker::Picker,
+    stack: &[crate::picker::Picker],
     theme: &crate::theme::Theme,
     glyphs: &Glyphs,
 ) -> Paragraph<'a> {
+    let Some(picker) = stack.last() else { return Paragraph::new(Vec::<Line>::new()) };
     let (visible, highlight) = picker.visible();
+    let total = picker.matches().len();
 
     // Padded past the longest label rather than to a guessed width, or a long
     // one runs straight into its state with no gap — `Ollama (local)ready`.
@@ -989,20 +1024,32 @@ fn picker_widget<'a>(
         .unwrap_or(0)
         + 2;
 
+    // The ratio is what makes a short list self-explaining: without a
+    // denominator, "one result" and "one result out of two hundred" look the
+    // same, and a filter that excluded everything looks like an empty menu.
+    let ratio = format!("{total}/{}", picker.len());
+    let head = if picker.filter().is_empty() {
+        "type to filter".to_string()
+    } else {
+        format!("{} {}", glyphs.prompt, picker.filter())
+    };
     let mut lines = vec![Line::from(vec![
-        Span::styled(
-            if picker.filter().is_empty() {
-                "type to filter".to_string()
-            } else {
-                format!("{} {}", glyphs.prompt, picker.filter())
-            },
-            theme.dim(),
-        ),
+        Span::styled(head, theme.dim()),
+        Span::styled(format!("   {ratio}"), theme.dim()),
     ])];
     lines.push(Line::default());
 
     if visible.is_empty() {
-        lines.push(Line::styled("  nothing matches", theme.dim()));
+        // Echoes the query, because the usual cause is a typo the user cannot
+        // see from the result, and names the way out.
+        lines.push(Line::styled(
+            format!("  nothing matches {:?}", picker.filter()),
+            theme.dim(),
+        ));
+        lines.push(Line::styled(
+            "  backspace to narrow less, esc to clear the filter",
+            theme.dim(),
+        ));
     }
 
     for (index, item) in visible.iter().enumerate() {
@@ -1030,22 +1077,48 @@ fn picker_widget<'a>(
     }
 
     lines.push(Line::default());
+    // Names what Esc will actually do, which now depends on both the filter
+    // and the depth. A fixed "esc cancel" was a lie at every level but one.
+    let escape = if !picker.filter().is_empty() {
+        "esc clear filter".to_string()
+    } else if stack.len() > 1 {
+        match stack.get(stack.len() - 2) {
+            Some(parent) => format!("esc back to {}", parent.title),
+            None => "esc back".to_string(),
+        }
+    } else {
+        "esc close".to_string()
+    };
     lines.push(Line::styled(
         format!(
-            "  {}{} move   enter choose   esc cancel",
+            "  {}{} move   enter choose   {escape}",
             glyphs.arrow_up, glyphs.arrow_down
         ),
         theme.dim(),
     ));
 
+    // The trail is built from the stack itself, so it cannot drift from where
+    // the user actually is. Ancestors are dimmed and only the active level is
+    // emphasised, which keeps the distinction under NO_COLOR: `theme.label`
+    // falls back to BOLD when there is no colour to use.
+    let mut title = vec![Span::raw(" ")];
+    for (index, level) in stack.iter().enumerate() {
+        if index > 0 {
+            title.push(Span::styled(format!(" {} ", glyphs.prompt), theme.dim()));
+        }
+        let last = index + 1 == stack.len();
+        title.push(Span::styled(
+            level.title.clone(),
+            if last { theme.label(theme.accent) } else { theme.dim() },
+        ));
+    }
+    title.push(Span::raw(" "));
+
     Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.accent))
-            .title(Span::styled(
-                format!(" {} ", picker.title),
-                theme.label(theme.accent),
-            )),
+            .title(Line::from(title)),
     )
 }
 

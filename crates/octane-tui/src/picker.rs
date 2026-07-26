@@ -104,6 +104,11 @@ impl Picker {
         self.selected
     }
 
+    /// Rows before filtering, for the `matched/total` ratio.
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.matches().is_empty()
     }
@@ -138,6 +143,15 @@ impl Picker {
     pub fn push_filter(&mut self, ch: char) {
         self.filter.push(ch);
         // The old index almost certainly points at something else now.
+        self.selected = 0;
+    }
+
+    /// Drop the whole filter, restoring the full list.
+    ///
+    /// Distinct from repeated `pop_filter`: Esc undoes the narrowing in one
+    /// step, which is what makes it safe to reach for.
+    pub fn clear_filter(&mut self) {
+        self.filter.clear();
         self.selected = 0;
     }
 
@@ -277,5 +291,34 @@ mod tests {
         let (visible, highlight) = picker.visible();
         assert_eq!(visible.len(), MAX_VISIBLE);
         assert!(highlight < MAX_VISIBLE, "the highlight must stay in the window");
+    }
+
+    #[test]
+    fn clearing_the_filter_restores_every_row() {
+        // One step, not a run of backspaces: Esc undoes the whole narrowing,
+        // which is what makes it safe to reach for after a mistyped query.
+        let mut picker = picker();
+        for ch in "groq".chars() {
+            picker.push_filter(ch);
+        }
+        assert_eq!(picker.matches().len(), 1);
+
+        picker.clear_filter();
+        assert_eq!(picker.matches().len(), picker.len());
+        assert_eq!(picker.selected(), 0);
+        assert!(picker.filter().is_empty());
+    }
+
+    #[test]
+    fn the_total_is_the_unfiltered_count() {
+        // The ratio's denominator. Without it a one-row result and a one-row
+        // menu look identical.
+        let mut picker = picker();
+        let total = picker.len();
+        for ch in "groq".chars() {
+            picker.push_filter(ch);
+        }
+        assert_eq!(picker.len(), total, "filtering must not change the total");
+        assert_eq!(picker.matches().len(), 1);
     }
 }

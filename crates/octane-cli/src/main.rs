@@ -472,6 +472,8 @@ async fn interactive(
 
         match event {
             AppEvent::Picked { kind: octane_tui::PickerKind::Provider, key } => {
+                // Terminal: nothing opens from here, so the overlay closes.
+                app.close_pickers();
                 match connect_provider(workspace, &key) {
                     Ok(report) => {
                         app.push_event(&completed_static(ItemKind::AgentMessage {
@@ -496,15 +498,21 @@ async fn interactive(
             // cycling it in place: a four-value setting cycled blind takes
             // three keystrokes to inspect and one to overshoot.
             AppEvent::Picked { kind: octane_tui::PickerKind::Setting, key } => {
-                match setting_value_picker(workspace, &settings, &model_names, &key) {
+                // Pushed, not replaced: Esc from the values goes back to the
+                // setting list with its filter and selection intact.
+                match setting_value_picker(&settings, &model_names, &key) {
                     Some(picker) => app.set_picker(picker),
-                    None => app.push_event(&completed_static(ItemKind::Error {
-                        message: format!("{key} is not an editable setting."),
-                    }))?,
+                    None => {
+                        app.close_pickers();
+                        app.push_event(&completed_static(ItemKind::Error {
+                            message: format!("{key} is not an editable setting."),
+                        }))?
+                    }
                 }
             }
 
             AppEvent::Picked { kind: octane_tui::PickerKind::SettingValue(setting), key: value } => {
+                app.close_pickers();
                 let outcome = apply_setting(
                     workspace,
                     &mut settings,
@@ -937,7 +945,6 @@ fn settings_picker(settings: &octane_config::Settings, models: &[String]) -> oct
 /// that follows immediately from changing a setting, and answering it anywhere
 /// else means answering it after the write.
 fn setting_value_picker(
-    workspace: &Utf8PathBuf,
     settings: &octane_config::Settings,
     models: &[String],
     key: &str,
@@ -960,10 +967,12 @@ fn setting_value_picker(
         })
         .collect();
 
-    let target = octane_config::edit::target(&octane_config::roots(workspace), key);
+    // Just the key. The trail already says "Settings", and the destination
+    // path is long enough to crowd out the crumb it is appended to. The write
+    // reports the file it landed in, which is when that actually matters.
     Some(octane_tui::Picker::new(
         PickerKind::SettingValue(key.to_string()),
-        format!("{key} → {target}"),
+        key.to_string(),
         items,
     ))
 }
