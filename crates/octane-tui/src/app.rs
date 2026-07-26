@@ -405,6 +405,12 @@ impl App {
         let workspace = self.workspace.clone();
         let sandboxed = self.sandboxed;
 
+        // Carried out through a local: `self` is mutably borrowed by
+        // `transcript` below, so the closure cannot write a field on it. This
+        // is the rect a click is tested against, and leaving it at its default
+        // makes every click miss.
+        let mut drawn_body = ratatui::layout::Rect::default();
+
         let transcript = &mut self.transcript;
         let composer = &self.composer;
         let completion = &self.completion;
@@ -428,6 +434,7 @@ impl App {
 
             // Transcript, or the empty state.
             let body = chunks[1];
+            drawn_body = body;
             // Cleared first: `Paragraph` writes only the cells it covers, so a
             // line shorter than the one it replaces leaves the old tail behind.
             // That is the stray-character bleed at the end of scrolled lines.
@@ -524,6 +531,7 @@ impl App {
             }
         })?;
 
+        self.body_area = drawn_body;
         let _ = crossterm::execute!(io::stdout(), EndSynchronizedUpdate);
         Ok(())
     }

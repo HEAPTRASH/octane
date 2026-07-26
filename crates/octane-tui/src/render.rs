@@ -180,10 +180,14 @@ fn render_item(event: &ItemEvent, options: &RenderOptions, expanded: bool) -> Ve
             // rather than a matter of colour. The marker differs on failure for
             // the same reason: a red line is invisible to a reader who cannot
             // see red, and to anyone under NO_COLOR.
+            // No marker when it worked. The row is indented under the call it
+            // answers, which already says what it is, and a bullet on every
+            // result is a column of noise. A failure keeps its marker, because
+            // that is the one outcome that must not be quiet.
             let (marker, colour) = if *is_error {
-                (glyphs.error, theme.error)
+                (format!("{} ", glyphs.error), theme.error)
             } else {
-                (glyphs.notice, theme.tool)
+                (String::new(), theme.tool)
             };
 
             // The detail when there is one, else the title. For `read` and
@@ -200,7 +204,7 @@ fn render_item(event: &ItemEvent, options: &RenderOptions, expanded: bool) -> Ve
             // case that motivated naming the result, and the body under it
             // identifies those far better than a repeated tool name does.
             let mut lines = vec![Line::from(vec![
-                Span::styled(format!("  {marker} "), Style::default().fg(colour)),
+                Span::styled(format!("  {marker}"), Style::default().fg(colour)),
                 Span::styled(summary, theme.dim()),
             ])];
 
