@@ -96,6 +96,8 @@ pub struct App {
     /// on the user, none is, and the one thing that should draw the eye is the
     /// prompt.
     parked_activity: Option<crate::status::Activity>,
+    /// Whether the pending approval's diff is shown past its cap.
+    approval_expanded: bool,
     /// Tool results that can be shown in full, kept so a toggle can re-render
     /// them. Only these are retained: everything else in the transcript is
     /// already whole.
@@ -178,6 +180,7 @@ impl App {
             files: Vec::new(),
             pending_approval: None,
             parked_activity: None,
+            approval_expanded: false,
             expandable: std::collections::HashMap::new(),
             expanded: std::collections::HashSet::new(),
             body_area: ratatui::layout::Rect::default(),
@@ -349,6 +352,7 @@ impl App {
         responder: tokio::sync::oneshot::Sender<ApprovalReply>,
     ) {
         self.pending_approval = Some((prompt, responder));
+        self.approval_expanded = false;
         self.parked_activity = self.status.activity.take();
         self.dirty = true;
     }
@@ -392,7 +396,7 @@ impl App {
         let approval_rows = self
             .pending_approval
             .as_ref()
-            .map(|(prompt, _)| approval_height(prompt))
+            .map(|(prompt, _)| approval_height(prompt, self.approval_expanded))
             .unwrap_or(0);
         let activity_rows = u16::from(self.status.activity.is_some());
 
@@ -401,6 +405,7 @@ impl App {
         let theme = self.options.theme;
         let glyphs = self.glyphs;
         let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
+        let approval_expanded = self.approval_expanded;
         let picker_state = self.pickers.clone();
         let workspace = self.workspace.clone();
         let sandboxed = self.sandboxed;
@@ -462,7 +467,20 @@ impl App {
                     Span::raw(prompt.title()),
                 ])];
                 if let Some(diff) = &prompt.diff {
-                    lines.extend(crate::render::render_diff(diff, &theme));
+                    let rendered = crate::render::render_diff(diff, &theme);
+                    let total = rendered.len();
+                    let shown = if approval_expanded {
+                        total
+                    } else {
+                        total.min(usize::from(APPROVAL_DIFF_ROWS))
+                    };
+                    lines.extend(rendered.into_iter().take(shown));
+                    if total > shown {
+                        lines.push(Line::styled(
+                            format!("  [+ {} more lines - f]", total - shown),
+                            theme.dim(),
+                        ));
+                    }
                 }
                 lines.push(Line::styled(prompt.options_line(), theme.dim()));
                 frame.render_widget(Paragraph::new(lines), chunks[2]);
@@ -838,6 +856,14 @@ impl App {
     }
 
     fn answer(&mut self, reply: ApprovalReply) {
+        // `f` is not a decision: it grows the diff and leaves the question
+        // standing. It was advertised and did nothing, because this early
+        // return swallowed it before anything acted on it.
+        if matches!(reply, ApprovalReply::ShowDiff) {
+            self.approval_expanded = !self.approval_expanded;
+            self.dirty = true;
+            return;
+        }
         if !reply.is_decision() {
             return;
         }
@@ -1059,13 +1085,19 @@ fn composer_height(composer: &Composer, width: u16) -> u16 {
     u16::try_from(rows).unwrap_or(MAX_COMPOSER_ROWS).clamp(1, MAX_COMPOSER_ROWS)
 }
 
-fn approval_height(prompt: &ApprovalPrompt) -> u16 {
+/// Diff rows shown before `f` is pressed.
+const APPROVAL_DIFF_ROWS: u16 = 12;
+
+fn approval_height(prompt: &ApprovalPrompt, expanded: bool) -> u16 {
     let diff_rows = prompt
         .diff
         .as_ref()
-        // Capped: a 500-line diff must not swallow the screen. `f` opens the
-        // full view for anything larger.
-        .map(|diff| u16::try_from(diff.lines().count()).unwrap_or(u16::MAX).min(12))
+        // Capped, or a 500-line diff swallows the screen. `f` lifts the cap,
+        // which is what it always claimed to do.
+        .map(|diff| {
+            let total = u16::try_from(diff.lines().count()).unwrap_or(u16::MAX);
+            if expanded { total } else { total.min(APPROVAL_DIFF_ROWS) }
+        })
         .unwrap_or(0);
     2 + diff_rows
 }
@@ -1352,12 +1384,24 @@ mod tests {
     }
 
     #[test]
+    fn pressing_f_lifts_the_diff_cap() {
+        // The key was advertised from the first version of this prompt and did
+        // nothing: `answer` returned early on anything that was not a
+        // decision, so the reply was swallowed before it reached here.
+        let huge: String = (0..40).map(|i| format!("+ line {i}\n")).collect();
+        let prompt = prompt(Some(&huge));
+
+        assert_eq!(approval_height(&prompt, false), 2 + APPROVAL_DIFF_ROWS);
+        assert_eq!(approval_height(&prompt, true), 2 + 40);
+    }
+
+    #[test]
     fn approval_height_accounts_for_the_diff_and_caps_it() {
-        assert_eq!(approval_height(&prompt(None)), 2);
-        assert_eq!(approval_height(&prompt(Some("+ one\n+ two\n"))), 4);
+        assert_eq!(approval_height(&prompt(None), false), 2);
+        assert_eq!(approval_height(&prompt(Some("+ one\n+ two\n")), false), 4);
 
         let huge: String = (0..500).map(|i| format!("+ line {i}\n")).collect();
-        assert_eq!(approval_height(&prompt(Some(&huge))), 14);
+        assert_eq!(approval_height(&prompt(Some(&huge)), false), 14);
     }
 
     #[test]

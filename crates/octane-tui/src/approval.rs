@@ -38,7 +38,7 @@ impl ApprovalPrompt {
     /// distrust the whole line.
     pub fn options_line(&self) -> &'static str {
         if self.diff.is_some() {
-            "[y] allow  [n] reject  [f] full diff  [ctrl+g] edit  or type instructions"
+            "[y] allow  [n] reject  [f] full diff  or type instructions"
         } else {
             "[y] allow  [n] reject  or type instructions"
         }
@@ -73,8 +73,6 @@ pub enum ApprovalReply {
     RejectWith { instructions: String },
     /// Not a decision: open the full-screen diff and ask again.
     ShowDiff,
-    /// Not a decision: open `$EDITOR` and ask again.
-    OpenEditor,
 }
 
 impl ApprovalReply {
@@ -216,7 +214,6 @@ mod tests {
     #[test]
     fn navigation_replies_are_not_decisions() {
         assert!(!ApprovalReply::ShowDiff.is_decision());
-        assert!(!ApprovalReply::OpenEditor.is_decision());
         assert!(ApprovalReply::Allow.is_decision());
         assert!(ApprovalReply::Reject.is_decision());
     }
