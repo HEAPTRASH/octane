@@ -91,6 +91,11 @@ pub struct App {
     files: Vec<String>,
 
     pending_approval: Option<(ApprovalPrompt, tokio::sync::oneshot::Sender<ApprovalReply>)>,
+    /// The activity held aside while an approval waits, restored when it is
+    /// answered. A spinner means work is happening; while the turn is blocked
+    /// on the user, none is, and the one thing that should draw the eye is the
+    /// prompt.
+    parked_activity: Option<crate::status::Activity>,
     spinner_frame: usize,
     started: Instant,
 
@@ -165,6 +170,7 @@ impl App {
             commands: Vec::new(),
             files: Vec::new(),
             pending_approval: None,
+            parked_activity: None,
             spinner_frame: 0,
             started: Instant::now(),
             workspace,
@@ -305,6 +311,7 @@ impl App {
         responder: tokio::sync::oneshot::Sender<ApprovalReply>,
     ) {
         self.pending_approval = Some((prompt, responder));
+        self.parked_activity = self.status.activity.take();
         self.dirty = true;
     }
 
@@ -752,6 +759,9 @@ impl App {
         if !reply.is_decision() {
             return;
         }
+        if self.pending_approval.is_some() {
+            self.status.activity = self.parked_activity.take();
+        }
         if let Some((_, responder)) = self.pending_approval.take() {
             let _ = responder.send(reply);
             self.dirty = true;
@@ -988,8 +998,22 @@ fn picker_height(picker: &crate::picker::Picker) -> u16 {
     // An empty result is two body lines, not one: the echoed query and the way
     // out. Undercounting here silently clips the hint line, which is the line
     // that says what Esc will do.
-    let rows = if picker.is_empty() { 2 } else { picker.visible().0.len() };
-    u16::try_from(rows).unwrap_or(10) + 6
+    // Counted, not estimated. Undercounting clips the hint line, which is the
+    // line that says what Esc will do; overcounting leaves a dead row inside
+    // the border. Mirrors `picker_widget` exactly, so the two move together.
+    let (visible, highlight) = picker.visible();
+    let mut lines = 2 // filter line, blank
+        + if picker.is_empty() { 2 } else { visible.len() }
+        + 2; // blank, hints
+
+    if visible.get(highlight).is_some_and(|item| !item.detail.is_empty()) {
+        lines += 1;
+    }
+    if picker.matches().len() > visible.len() {
+        lines += 1;
+    }
+
+    u16::try_from(lines).unwrap_or(14) + 2 // borders
 }
 
 /// A box of the given width and height, centred in `area`.
@@ -1074,6 +1098,20 @@ fn picker_widget<'a>(
             spans.push(Span::styled(state.clone(), style));
         }
         lines.push(Line::from(spans));
+
+        // Under the highlight only. Every row would triple the box height and
+        // bury the list the detail is meant to explain.
+        if selected && !item.detail.is_empty() {
+            lines.push(Line::styled(format!("      {}", item.detail), theme.dim()));
+        }
+    }
+
+    // `visible()` windows to MAX_VISIBLE and says nothing about the remainder,
+    // so a long list looked complete. The ratio above counts matches, not rows
+    // on screen.
+    let hidden = total.saturating_sub(visible.len());
+    if hidden > 0 {
+        lines.push(Line::styled(format!("  [+ {hidden} more]"), theme.dim()));
     }
 
     lines.push(Line::default());
