@@ -255,6 +255,10 @@ Decisions that are not obvious from the code:
   beats a narrow `allow(command(git))`. One exception: an interactive
   grant made this session outranks a configured `ask`, or "remember my
   answer" is impossible.
+- Default mode does not prompt for file edits inside the workspace. That
+  is what the agent is for, and prompting for each one makes it
+  unusable. Commands always ask, and a write outside the writable roots
+  is refused by the sandbox regardless of policy.
 - `.git/` and `.octane/` are read-only inside writable roots. Otherwise
   a project-write grant reaches `.git/hooks/pre-commit`, which is
   arbitrary code on the next commit, and lets the agent rewrite its own

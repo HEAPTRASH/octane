@@ -13,7 +13,13 @@ use crate::resource::{Action, Resource};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PermissionMode {
-    /// Ask before anything mutating. The safe default.
+    /// Ask before running a command, or writing outside the workspace. The
+    /// safe default.
+    ///
+    /// It does NOT ask before editing a file inside the project: that is the
+    /// whole point of the tool, and `Policy::evaluate` allows it explicitly as
+    /// `Reason::WorkspaceDefault`. Saying "ask before anything mutating" here
+    /// read as a stronger promise than the engine makes.
     #[default]
     Default,
     /// Read-only. Investigate and propose; change nothing.

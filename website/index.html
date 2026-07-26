@@ -3,156 +3,474 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OCTANE.RS /// AI Coding Agent for Terminal</title>
-  <meta name="description" content="A fast, kernel-sandboxed AI coding agent for the terminal built in Rust.">
+  <title>Octane — Power meets precision.</title>
+  <meta name="description" content="Octane is a terminal-native AI coding agent engineered in Rust for speed, kernel-level containment, and zero-flicker performance.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;600;700&family=Inter:wght@400;700;900&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- Top Ticker Bar -->
-  <div class="ticker-bar">
-    <span>⚡ OCTANE.RS /// RUST 2024 /// KERNEL CONTAINMENT /// SYNCHRONIZED STREAMING TUI /// MULTI-PROVIDER ROUTING ⚡</span>
+  <!-- Top Announcement Bar -->
+  <div class="announcement-bar">
+    <div class="container announcement-content">
+      <span><strong>Introducing Octane 2025.</strong> Fast, kernel-sandboxed AI coding agent built in Rust.</span>
+      <a href="#quickstart" class="announcement-link">Get Started &rarr;</a>
+    </div>
   </div>
 
   <!-- Navigation -->
-  <header class="navbar">
+  <header class="navbar" id="navbar">
     <div class="container nav-container">
-      <a href="#" class="brand-logo">
-        <span class="logo-box">⚡</span>
-        <span class="logo-text">OCTANE<span class="logo-dot">.RS</span></span>
+      <a href="#" class="nav-brand">
+        <svg class="brand-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+        </svg>
+        <span class="brand-name">Octane</span>
       </a>
 
       <nav class="nav-links">
-        <a href="#features">FEATURES</a>
-        <a href="#quickstart">QUICKSTART</a>
-        <a href="https://github.com/raymond/octane-agent" target="_blank" rel="noopener" class="btn btn-secondary">
+        <a href="#overview">Overview</a>
+        <a href="#features">Features</a>
+        <a href="#interactive">Capabilities</a>
+        <a href="#specs">Specs</a>
+        <a href="#quickstart">Quickstart</a>
+      </nav>
+
+      <div class="nav-cta">
+        <a href="https://github.com/raymond/octane-agent" target="_blank" rel="noopener" class="btn btn-nav">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
             <path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/>
           </svg>
-          <span>GITHUB</span>
+          <span>GitHub</span>
         </a>
-      </nav>
+      </div>
     </div>
   </header>
 
   <!-- Hero Section -->
-  <section class="hero-section">
+  <section id="overview" class="hero-section">
     <div class="container hero-container">
-      <div class="badge-row">
-        <span class="badge badge-acid">RUST 2024</span>
-        <span class="badge">KERNEL SANDBOXED</span>
-        <span class="badge badge-cyan">ZERO-FLICKER TUI</span>
+      <div class="hero-badge reveal-on-scroll">
+        <span class="badge-dot"></span> Rust 2024 Architecture
       </div>
 
-      <h1 class="hero-title">
-        TERMINAL-NATIVE <br>
-        <span class="hero-highlight">AI CODING AGENT</span>
+      <h1 class="hero-headline reveal-on-scroll stagger-1">
+        Power meets precision.
       </h1>
 
-      <p class="hero-subtitle">
-        Fast, kernel-sandboxed AI coding agent built in Rust. Features native OS containment (Seatbelt / Landlock), zero-flicker synchronized TUI, multi-provider LLM routing, and deterministic tool execution.
+      <p class="hero-subheadline reveal-on-scroll stagger-2">
+        The terminal-native AI coding agent engineered for high performance, kernel-level sandboxing, and zero-flicker streaming.
       </p>
 
-      <!-- Quick Install Box -->
-      <div class="quick-install-box">
-        <span class="prompt">$</span>
-        <code>cargo install octane-cli</code>
-        <button class="copy-btn" data-copy="cargo install octane-cli">[COPY]</button>
+      <div class="hero-actions reveal-on-scroll stagger-2">
+        <a href="#quickstart" class="btn btn-primary">Install Octane</a>
+        <div class="command-pill">
+          <span class="pill-prompt">$</span>
+          <code class="pill-code">cargo install octane-cli</code>
+          <button class="copy-btn" data-copy="cargo install octane-cli" title="Copy command">
+            <svg class="copy-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+            <span class="copy-label">Copy</span>
+          </button>
+        </div>
       </div>
 
-      <!-- Terminal Preview -->
-      <div class="terminal-box">
-        <div class="terminal-bar">
-          <div class="term-dots">
-            <span class="dot red"></span>
-            <span class="dot yellow"></span>
-            <span class="dot green"></span>
+      <!-- Hero Visual / Mockup -->
+      <div class="hero-visual-wrapper reveal-on-scroll stagger-3">
+        <div class="mac-window">
+          <div class="mac-titlebar">
+            <div class="mac-controls">
+              <span class="mac-dot mac-close"></span>
+              <span class="mac-dot mac-minimize"></span>
+              <span class="mac-dot mac-maximize"></span>
+            </div>
+            <div class="mac-title">octane — terminal agent</div>
+            <div class="mac-status">
+              <span class="status-indicator"></span> Seatbelt Active
+            </div>
           </div>
-          <div class="term-title">octane doctor</div>
-        </div>
-        <div class="terminal-body">
-          <div class="term-line"><span class="prompt">❯</span> <span class="cyan">octane doctor</span></div>
-          <div class="term-line"><span class="green">[OK]</span> Containment: macOS Seatbelt active</div>
-          <div class="term-line"><span class="green">[OK]</span> Tools: read, write, edit, bash, glob, grep, list, task</div>
-          <div class="term-line"><span class="green">[OK]</span> Model: openrouter/claude-3.7-sonnet</div>
-          <div class="term-line"><span class="dim">Status: All systems operational</span></div>
+          <div class="mac-content">
+            <div class="term-line prompt-line">
+              <span class="term-prompt">❯</span> <span class="term-cmd">octane doctor</span>
+            </div>
+            <div class="term-line success-line">
+              <span class="term-tag tag-pass">OK</span>
+              <span class="term-text">Containment: macOS Seatbelt sandbox enforced</span>
+            </div>
+            <div class="term-line success-line">
+              <span class="term-tag tag-pass">OK</span>
+              <span class="term-text">Tools: read, write, edit, bash, glob, grep, list, task</span>
+            </div>
+            <div class="term-line success-line">
+              <span class="term-tag tag-pass">OK</span>
+              <span class="term-text">Provider: openrouter / claude-3.7-sonnet</span>
+            </div>
+            <div class="term-line info-line">
+              <span class="term-tag tag-info">INFO</span>
+              <span class="term-text">Zero-flicker TUI synchronized mode enabled (CSI ?2026h/l)</span>
+            </div>
+            <div class="term-divider"></div>
+            <div class="term-line prompt-line">
+              <span class="term-prompt">❯</span> <span class="term-cmd">Refactor user auth module and add unit test coverage</span>
+            </div>
+            <div class="term-streaming-box">
+              <div class="stream-header">
+                <span class="stream-spinner"></span>
+                <span>octane execution agent working...</span>
+              </div>
+              <div class="stream-body">
+                <span class="code-keyword">task</span> <span class="code-str">"Reading auth handler at crates/octane-core/src/auth.rs"</span><br>
+                <span class="code-keyword">edit</span> <span class="code-str">"crates/octane-core/src/auth.rs"</span> &rarr; updated JWT validation path<br>
+                <span class="code-keyword">bash</span> <span class="code-str">"cargo test --package octane-core"</span> &rarr; 14 passed; 0 failed
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Features Grid -->
-  <section id="features" class="section">
+  <!-- Key Highlight Stats -->
+  <section id="specs" class="specs-section">
     <div class="container">
-      <div class="section-header">
-        <h2>ENGINEERED FOR SPEED & SECURITY</h2>
-        <p>Built from the ground up in Rust with zero domain logic coupling.</p>
-      </div>
-
-      <div class="features-grid">
-        <div class="feature-card">
-          <div class="feature-tag">01 /// OS CONTAINMENT</div>
-          <h3>Kernel Sandboxing</h3>
-          <p>Enforces process boundaries at the OS level using Seatbelt (macOS) and Landlock (Linux). Read-only protections on <code>.git/</code> and <code>.octane/</code>.</p>
+      <div class="specs-grid">
+        <div class="spec-card reveal-on-scroll stagger-1">
+          <div class="spec-value">&lt; 5ms</div>
+          <div class="spec-label">Startup Latency</div>
+          <div class="spec-desc">Instantaneous execution built directly on native Rust binaries.</div>
         </div>
-
-        <div class="feature-card highlight">
-          <div class="feature-tag acid">02 /// TUI ENGINE</div>
-          <h3>Synchronized Streaming TUI</h3>
-          <p>Ratatui full-screen interface using synchronized output mode (<code>CSI ?2026h/l</code>) for 100% flicker-free rendering and zero-byte idle repaints.</p>
+        <div class="spec-card reveal-on-scroll stagger-2">
+          <div class="spec-value">100%</div>
+          <div class="spec-label">Kernel Sandboxed</div>
+          <div class="spec-desc">Hardware-enforced isolation with OS Seatbelt and Landlock boundaries.</div>
         </div>
-
-        <div class="feature-card">
-          <div class="feature-tag">03 /// GATEWAY ROUTING</div>
-          <h3>Multi-Provider LLM Gateway</h3>
-          <p>Bridge OpenAI, Anthropic, Google Gemini, OpenRouter, Vertex, and AWS SigV4 gateways with granular per-model route configuration.</p>
+        <div class="spec-card reveal-on-scroll stagger-3">
+          <div class="spec-value">0 Byte</div>
+          <div class="spec-label">Idle CPU Overhead</div>
+          <div class="spec-desc">Zero-flicker synchronized TUI repaints only when content changes.</div>
         </div>
-
-        <div class="feature-card">
-          <div class="feature-tag">04 /// TOOLING & MCP</div>
-          <h3>8 Safe Tools + MCP</h3>
-          <p>Built-in <code>read</code>, <code>write</code>, <code>edit</code>, <code>bash</code>, code search (<code>grep</code>, <code>glob</code>, <code>list</code>), and subagents (<code>task</code>), plus standard MCP support.</p>
+        <div class="spec-card reveal-on-scroll stagger-4">
+          <div class="spec-value">6+</div>
+          <div class="spec-label">LLM Providers</div>
+          <div class="spec-desc">Seamless gateway routing across Anthropic, OpenAI, Gemini, and OpenRouter.</div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- Quickstart Section -->
-  <section id="quickstart" class="section dark-bg">
+  <!-- Bento Box Features Grid -->
+  <section id="features" class="features-section">
     <div class="container">
-      <div class="section-header">
-        <h2>GETTING STARTED</h2>
-        <p>Run octane in seconds with Cargo or Nix Flakes.</p>
+      <div class="section-header reveal-on-scroll">
+        <span class="section-eyebrow">Engineered Architecture</span>
+        <h2 class="section-title">Designed down to the metal.</h2>
+        <p class="section-subtitle">Every component of Octane is built for uncompromising speed, safety, and operational focus.</p>
       </div>
 
-      <div class="steps-grid">
-        <div class="step-card">
-          <div class="step-num">01</div>
-          <h3>INSTALL CLI</h3>
-          <div class="code-box">
-            <code>cargo install octane-cli</code>
-            <button class="copy-btn" data-copy="cargo install octane-cli">[COPY]</button>
+      <div class="bento-grid">
+        <!-- Feature 1: Kernel Sandbox (Wide Card) -->
+        <div class="bento-card bento-card-large feature-sandboxing reveal-on-scroll stagger-1">
+          <div class="bento-badge">OS CONTAINMENT</div>
+          <h3 class="bento-title">Kernel-Level Security.</h3>
+          <p class="bento-text">
+            Never worry about runaway agent execution. Octane applies native OS kernel policies—Seatbelt on macOS and Landlock on Linux—enforcing strict path boundaries. Critical directories like <code>.git/</code> and <code>.octane/</code> remain read-only.
+          </p>
+          <div class="bento-graphic graphic-containment">
+            <div class="policy-chip chip-allowed">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <span>Workspace RW</span>
+            </div>
+            <div class="policy-chip chip-blocked">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+              <span>.git/ Protected</span>
+            </div>
+            <div class="policy-chip chip-blocked">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"></circle><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"></line></svg>
+              <span>System Roots Sandboxed</span>
+            </div>
           </div>
         </div>
 
-        <div class="step-card">
-          <div class="step-num">02</div>
-          <h3>VERIFY SETUP</h3>
-          <div class="code-box">
-            <code>octane doctor</code>
-            <button class="copy-btn" data-copy="octane doctor">[COPY]</button>
+        <!-- Feature 2: TUI Engine -->
+        <div class="bento-card feature-tui reveal-on-scroll stagger-2">
+          <div class="bento-badge">STREAMING TUI</div>
+          <h3 class="bento-title">100% Flicker-Free TUI.</h3>
+          <p class="bento-text">
+            Powered by Ratatui with synchronized terminal output mode (<code>CSI ?2026h/l</code>). Pure visual clarity even under rapid streaming.
+          </p>
+          <div class="bento-graphic graphic-tui">
+            <div class="sync-bar">
+              <div class="sync-dot"></div>
+              <span>Synchronized Render Pipeline</span>
+            </div>
           </div>
         </div>
 
-        <div class="step-card">
-          <div class="step-num">03</div>
-          <h3>LAUNCH AGENT</h3>
-          <div class="code-box">
-            <code>octane</code>
-            <button class="copy-btn" data-copy="octane">[COPY]</button>
+        <!-- Feature 3: Multi-Provider Routing -->
+        <div class="bento-card feature-providers reveal-on-scroll stagger-3">
+          <div class="bento-badge">MULTI-PROVIDER</div>
+          <h3 class="bento-title">Intelligence Unified.</h3>
+          <p class="bento-text">
+            Route prompts dynamically across Anthropic, OpenAI, OpenRouter, Google Gemini, AWS SigV4, or local Ollama instances.
+          </p>
+          <div class="provider-tags">
+            <span class="provider-pill">Anthropic</span>
+            <span class="provider-pill">OpenAI</span>
+            <span class="provider-pill">OpenRouter</span>
+            <span class="provider-pill">Gemini</span>
+            <span class="provider-pill">AWS SigV4</span>
+            <span class="provider-pill">Ollama</span>
+          </div>
+        </div>
+
+        <!-- Feature 4: Subagent Orchestration (Wide Card) -->
+        <div class="bento-card bento-card-large feature-subagents reveal-on-scroll stagger-4">
+          <div class="bento-badge">SUBAGENT ORCHESTRATION</div>
+          <h3 class="bento-title">Isolated subagents for deep workflows.</h3>
+          <p class="bento-text">
+            Delegate specialized sub-tasks to dedicated agent workers without cluttering your main context. Subagents run research, write unit tests, or audit code changes concurrently in isolated execution spaces.
+          </p>
+          <div class="subagent-nodes">
+            <div class="node-main">
+              <span class="node-title">Main Agent</span>
+              <span class="node-sub">Context Manager</span>
+            </div>
+            <div class="node-connector"></div>
+            <div class="node-children">
+              <div class="node-child">
+                <span class="node-role">code</span>
+                <span class="node-label">Refactoring</span>
+              </div>
+              <div class="node-child">
+                <span class="node-role">test</span>
+                <span class="node-label">Verification</span>
+              </div>
+              <div class="node-child">
+                <span class="node-role">critic</span>
+                <span class="node-label">Auditing</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Interactive Capabilities Explorer -->
+  <section id="interactive" class="interactive-section">
+    <div class="container">
+      <div class="section-header reveal-on-scroll">
+        <span class="section-eyebrow">Interactive Overview</span>
+        <h2 class="section-title">Explore Octane's core tools.</h2>
+        <p class="section-subtitle">Click through the capability modules to see how Octane works in practice.</p>
+      </div>
+
+      <div class="interactive-container reveal-on-scroll stagger-1">
+        <!-- Interactive Tabs -->
+        <div class="interactive-tabs">
+          <button class="tab-btn active" data-tab="containment">
+            <span class="tab-num">01</span>
+            <span class="tab-title">OS Containment</span>
+          </button>
+          <button class="tab-btn" data-tab="tooling">
+            <span class="tab-num">02</span>
+            <span class="tab-title">8 Safe Tools</span>
+          </button>
+          <button class="tab-btn" data-tab="subagents">
+            <span class="tab-num">03</span>
+            <span class="tab-title">Subagents</span>
+          </button>
+          <button class="tab-btn" data-tab="mcp">
+            <span class="tab-num">04</span>
+            <span class="tab-title">MCP Protocol</span>
+          </button>
+        </div>
+
+        <!-- Interactive Panels -->
+        <div class="interactive-panel">
+          <!-- Panel 1 -->
+          <div class="tab-content active" id="tab-containment">
+            <div class="panel-grid">
+              <div class="panel-info">
+                <div class="panel-badge">Kernel Boundaries</div>
+                <h3>macOS Seatbelt & Linux Landlock</h3>
+                <p>
+                  Unlike web-based or shell wrappers that execute commands directly in your user space with unrestricted access, Octane wraps process execution in kernel sandboxing rules.
+                </p>
+                <ul class="panel-list">
+                  <li><strong>Read-only guards:</strong> Prevents alteration of <code>.git/</code>, <code>.octane/</code>, and core configuration paths.</li>
+                  <li><strong>Workspace restriction:</strong> Confines write operations exclusively to designated working directories.</li>
+                  <li><strong>Network restrictions:</strong> Restricts subprocess sockets according to explicit policy rules.</li>
+                </ul>
+              </div>
+              <div class="panel-code">
+                <div class="code-header">
+                  <span class="code-dot"></span>
+                  <span class="code-filename">octane-sandbox / seatbelt.rs</span>
+                </div>
+                <pre class="code-block"><code><span class="ck">pub fn</span> <span class="cf">apply_seatbelt_profile</span>(workspace: &amp;<span class="ct">Path</span>) -&gt; <span class="ct">Result</span>&lt;()&gt; {
+    <span class="ck">let</span> profile = <span class="cm">format!</span>(
+        <span class="cs">r#"(version 1)
+(deny default)
+(allow file-read* (subpath "{}"))
+(allow file-write* (subpath "{}"))
+(deny file-write* (subpath "{}/.git"))"#</span>,
+        workspace.display(), workspace.display(), workspace.display()
+    );
+    <span class="ct">Seatbelt</span>::<span class="cf">enforce</span>(&amp;profile)?;
+    <span class="ct">Ok</span>(())
+}</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 2 -->
+          <div class="tab-content" id="tab-tooling">
+            <div class="panel-grid">
+              <div class="panel-info">
+                <div class="panel-badge">Built-in Suite</div>
+                <h3>8 Deterministic Tools</h3>
+                <p>
+                  Octane ships with a minimal, bulletproof set of native tools that standard LLMs can invoke cleanly and accurately.
+                </p>
+                <div class="tools-mini-grid">
+                  <div class="tool-chip"><code class="tc-name">read</code> <span class="tc-desc">Inspect exact line ranges</span></div>
+                  <div class="tool-chip"><code class="tc-name">edit</code> <span class="tc-desc">Surgical string replacement</span></div>
+                  <div class="tool-chip"><code class="tc-name">write</code> <span class="tc-desc">Create or overwrite files</span></div>
+                  <div class="tool-chip"><code class="tc-name">bash</code> <span class="tc-desc">Sandboxed shell execution</span></div>
+                  <div class="tool-chip"><code class="tc-name">grep</code> <span class="tc-desc">Regex codebase search</span></div>
+                  <div class="tool-chip"><code class="tc-name">glob</code> <span class="tc-desc">Fast path pattern matching</span></div>
+                  <div class="tool-chip"><code class="tc-name">list</code> <span class="tc-desc">Directory tree listing</span></div>
+                  <div class="tool-chip"><code class="tc-name">task</code> <span class="tc-desc">Subagent delegation</span></div>
+                </div>
+              </div>
+              <div class="panel-code">
+                <div class="code-header">
+                  <span class="code-dot"></span>
+                  <span class="code-filename">octane-tools / execution.rs</span>
+                </div>
+                <pre class="code-block"><code><span class="ck">match</span> tool_call {
+    <span class="ct">Tool</span>::<span class="cf">Edit</span> { path, old, new } =&gt; {
+        <span class="ck">let</span> content = <span class="cf">read_to_string</span>(&amp;path)?;
+        <span class="ck">let</span> updated = <span class="cf">replace_unique</span>(&amp;content, &amp;old, &amp;new)?;
+        <span class="cf">write_file</span>(&amp;path, &amp;updated)?;
+        <span class="ct">Ok</span>(<span class="cs">"Edit applied cleanly"</span>.<span class="cf">into</span>())
+    }
+}</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 3 -->
+          <div class="tab-content" id="tab-subagents">
+            <div class="panel-grid">
+              <div class="panel-info">
+                <div class="panel-badge">Delegated Execution</div>
+                <h3>Concurrent Subagent Delegation</h3>
+                <p>
+                  When complex multi-step tasks arise, the main agent spawns dedicated subagents with specific personas and clean context boundaries.
+                </p>
+                <ul class="panel-list">
+                  <li><strong>code agent:</strong> Implements well-specified changes end-to-end.</li>
+                  <li><strong>critic agent:</strong> Reviews code proposals to spot edge cases and security flaws.</li>
+                  <li><strong>research agent:</strong> Explores large codebases and gathers facts without polluting context.</li>
+                  <li><strong>test agent:</strong> Executes tests, collects exact stack traces, and verifies fixes.</li>
+                </ul>
+              </div>
+              <div class="panel-code">
+                <div class="code-header">
+                  <span class="code-dot"></span>
+                  <span class="code-filename">octane-context / delegation.rs</span>
+                </div>
+                <pre class="code-block"><code><span class="ck">pub async fn</span> <span class="cf">run_subagent</span>(agent_type: <span class="ct">AgentRole</span>, prompt: &amp;<span class="ct">str</span>) -&gt; <span class="ct">Result</span>&lt;<span class="ct">Report</span>&gt; {
+    <span class="ck">let</span> <span class="ck">mut</span> subagent = <span class="ct">Subagent</span>::<span class="cf">new</span>(agent_type);
+    subagent.<span class="cf">isolate_context</span>();
+    <span class="ck">let</span> report = subagent.<span class="cf">execute</span>(prompt).<span class="ck">await</span>?;
+    <span class="ct">Ok</span>(report.summarize())
+}</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Panel 4 -->
+          <div class="tab-content" id="tab-mcp">
+            <div class="panel-grid">
+              <div class="panel-info">
+                <div class="panel-badge">Standard Protocol</div>
+                <h3>Model Context Protocol (MCP) Integration</h3>
+                <p>
+                  Connect third-party tool servers, custom database connections, and external APIs using the standard MCP standard.
+                </p>
+                <ul class="panel-list">
+                  <li><strong>Auto-discovery:</strong> Reads <code>octane.json</code> or standard MCP server configs automatically.</li>
+                  <li><strong>Type safety:</strong> Seamlessly validates JSON-RPC schema types in Rust.</li>
+                  <li><strong>Security enforced:</strong> External MCP tools remain bound to sandbox restrictions.</li>
+                </ul>
+              </div>
+              <div class="panel-code">
+                <div class="code-header">
+                  <span class="code-dot"></span>
+                  <span class="code-filename">octane.json</span>
+                </div>
+                <pre class="code-block"><code>{
+  <span class="cs">"mcp_servers"</span>: {
+    <span class="cs">"postgres"</span>: {
+      <span class="cs">"command"</span>: <span class="cs">"npx"</span>,
+      <span class="cs">"args"</span>: [<span class="cs">"-y"</span>, <span class="cs">"@modelcontextprotocol/server-postgres"</span>]
+    }
+  }
+}</code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Installation / Quickstart Section -->
+  <section id="quickstart" class="quickstart-section">
+    <div class="container">
+      <div class="quickstart-box reveal-on-scroll">
+        <div class="qs-header">
+          <span class="section-eyebrow">Get Started</span>
+          <h2 class="section-title">Ready in seconds.</h2>
+          <p class="section-subtitle">Install Octane directly using Cargo or Nix Flakes.</p>
+        </div>
+
+        <div class="steps-container">
+          <div class="step-card reveal-on-scroll stagger-1">
+            <div class="step-badge">Step 1</div>
+            <h3 class="step-title">Install the CLI</h3>
+            <p class="step-desc">Build directly from crates.io with native Rust speed.</p>
+            <div class="step-code">
+              <code>cargo install octane-cli</code>
+              <button class="copy-btn" data-copy="cargo install octane-cli">Copy</button>
+            </div>
+          </div>
+
+          <div class="step-card reveal-on-scroll stagger-2">
+            <div class="step-badge">Step 2</div>
+            <h3 class="step-title">Run Health Doctor</h3>
+            <p class="step-desc">Verify your local OS containment features and LLM provider keys.</p>
+            <div class="step-code">
+              <code>octane doctor</code>
+              <button class="copy-btn" data-copy="octane doctor">Copy</button>
+            </div>
+          </div>
+
+          <div class="step-card reveal-on-scroll stagger-3">
+            <div class="step-badge">Step 3</div>
+            <h3 class="step-title">Launch Octane</h3>
+            <p class="step-desc">Start coding with your sandboxed terminal AI agent.</p>
+            <div class="step-code">
+              <code>octane</code>
+              <button class="copy-btn" data-copy="octane">Copy</button>
+            </div>
           </div>
         </div>
       </div>
@@ -162,15 +480,43 @@
   <!-- Footer -->
   <footer class="footer">
     <div class="container footer-container">
-      <div class="footer-brand">
-        <a href="#" class="brand-logo">
-          <span class="logo-box">⚡</span>
-          <span class="logo-text">OCTANE<span class="logo-dot">.RS</span></span>
-        </a>
-        <p>Terminal-native AI coding agent, written in Rust.</p>
+      <div class="footer-top">
+        <div class="footer-brand">
+          <div class="brand-logo">
+            <svg class="brand-icon" viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2">
+              <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+            </svg>
+            <span>Octane</span>
+          </div>
+          <p class="footer-tagline">Terminal-native AI coding agent. Built in Rust 2024.</p>
+        </div>
+
+        <div class="footer-links-group">
+          <div class="footer-col">
+            <span class="col-title">Architecture</span>
+            <a href="#overview">Kernel Sandbox</a>
+            <a href="#features">Ratatui TUI</a>
+            <a href="#features">Multi-Provider</a>
+            <a href="#interactive">Subagents</a>
+          </div>
+
+          <div class="footer-col">
+            <span class="col-title">Resources</span>
+            <a href="https://github.com/raymond/octane-agent" target="_blank" rel="noopener">GitHub Repo</a>
+            <a href="https://crates.io" target="_blank" rel="noopener">crates.io</a>
+            <a href="#quickstart">Quickstart Guide</a>
+          </div>
+
+          <div class="footer-col">
+            <span class="col-title">License</span>
+            <span class="footer-text">MIT Open Source</span>
+            <span class="footer-text">Copyright &copy; 2025</span>
+          </div>
+        </div>
       </div>
-      <div class="footer-meta">
-        <p>© 2025 OCTANE-AGENT /// MIT LICENSE</p>
+
+      <div class="footer-bottom">
+        <p>Copyright &copy; 2025 Octane Agent. Designed with precision inspired by Apple minimalism.</p>
       </div>
     </div>
   </footer>

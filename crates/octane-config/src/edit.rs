@@ -143,12 +143,12 @@ pub fn catalogue(models: &[String]) -> Vec<Editable> {
         applies: Applies::Live,
         default: Some(Value::Text(String::from("default"))),
         choices: vec![
-            Choice::new(Value::text("default"), "default", "Ask before anything mutating"),
+            Choice::new(Value::text("default"), "default", "Ask before commands; edit in the project freely"),
             Choice::new(Value::text("plan"), "plan", "Read-only; propose, change nothing"),
             Choice::new(
                 Value::text("accept-edits"),
                 "accept-edits",
-                "Auto-approve edits, still ask for commands",
+                "Auto-approve edits anywhere, still ask for commands",
             ),
             Choice::new(
                 Value::text("bypass"),
