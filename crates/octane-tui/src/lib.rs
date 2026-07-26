@@ -38,6 +38,7 @@ pub mod banner;
 pub mod completion;
 pub mod composer;
 pub mod glyphs;
+pub mod highlight;
 pub mod keymap;
 pub mod markdown;
 pub mod picker;

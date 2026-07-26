@@ -312,17 +312,16 @@
                   <span class="code-dot"></span>
                   <span class="code-filename">octane-sandbox / seatbelt.rs</span>
                 </div>
-                <pre class="code-block"><code><span class="ck">pub fn</span> <span class="cf">apply_seatbelt_profile</span>(workspace: &amp;<span class="ct">Path</span>) -&gt; <span class="ct">Result</span>&lt;()&gt; {
-    <span class="ck">let</span> profile = <span class="cm">format!</span>(
-        <span class="cs">r#"(version 1)
-(deny default)
-(allow file-read* (subpath "{}"))
-(allow file-write* (subpath "{}"))
-(deny file-write* (subpath "{}/.git"))"#</span>,
-        workspace.display(), workspace.display(), workspace.display()
-    );
-    <span class="ct">Seatbelt</span>::<span class="cf">enforce</span>(&amp;profile)?;
-    <span class="ct">Ok</span>(())
+                <pre class="code-block"><code><span class="ck">pub fn</span> <span class="cf">build_profile</span>(policy: &amp;<span class="ct">SandboxPolicy</span>) -&gt; (<span class="ct">String</span>, <span class="ct">Vec</span>&lt;(<span class="ct">String</span>, <span class="ct">String</span>)&gt;) {
+    <span class="ck">let mut</span> profile = <span class="ct">String</span>::<span class="cf">from</span>(BASE_PROFILE);
+    <span class="ck">let mut</span> params = <span class="ct">Vec</span>::<span class="cf">new</span>();
+
+    <span class="ck">for</span> (i, root) <span class="ck">in</span> policy.<span class="cf">writable_roots</span>().<span class="cf">iter</span>().<span class="cf">enumerate</span>() {
+        <span class="ck">let</span> param = <span class="cm">format!</span>(<span class="cs">"WRITABLE_ROOT_{i}"</span>);
+        params.<span class="cf">push</span>((param.<span class="cf">clone</span>(), root.path.<span class="cf">to_string</span>()));
+        profile.<span class="cf">push_str</span>(&amp;<span class="cm">format!</span>(<span class="cs">"  (subpath (param \"{param}\"))\n"</span>));
+    }
+    (profile, params)
 }</code></pre>
               </div>
             </div>

@@ -26,6 +26,10 @@ use crate::theme::Theme;
 pub fn render(source: &str, theme: &Theme, glyphs: &Glyphs) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     let mut fence: Option<String> = None;
+    // Held for the whole block, not per line: a lexer is stateful, and a string
+    // opened on one line and closed on the next only reads correctly if the
+    // parse carries over.
+    let mut highlighter: Option<crate::highlight::Highlighter> = None;
 
     for raw in source.split('\n') {
         // Fences first: everything else is suppressed inside one.
@@ -34,10 +38,12 @@ pub fn render(source: &str, theme: &Theme, glyphs: &Glyphs) -> Vec<Line<'static>
                 Some(_) => {
                     out.push(code_edge(glyphs, theme, false));
                     fence = None;
+                    highlighter = None;
                 }
                 None => {
                     let language = rest.trim().to_string();
                     out.push(code_header(&language, glyphs, theme));
+                    highlighter = crate::highlight::Highlighter::new(&language, theme);
                     fence = Some(language);
                 }
             }
@@ -45,7 +51,7 @@ pub fn render(source: &str, theme: &Theme, glyphs: &Glyphs) -> Vec<Line<'static>
         }
 
         if fence.is_some() {
-            out.push(code_line(raw, glyphs, theme));
+            out.push(code_line(raw, glyphs, theme, highlighter.as_mut()));
             continue;
         }
 
@@ -80,12 +86,20 @@ fn code_edge(glyphs: &Glyphs, theme: &Theme, _open: bool) -> Line<'static> {
 }
 
 /// A line inside a fence: verbatim, with a margin so it reads as a block.
-fn code_line(text: &str, glyphs: &Glyphs, theme: &Theme) -> Line<'static> {
-    Line::from(vec![
-        Span::styled(format!("{} ", glyphs.code_bar()), theme.dim()),
-        // Deliberately unstyled and uninterpreted: this is what the user copies.
-        Span::styled(text.to_string(), Style::default().fg(theme.code)),
-    ])
+fn code_line(
+    text: &str,
+    glyphs: &Glyphs,
+    theme: &Theme,
+    highlighter: Option<&mut crate::highlight::Highlighter>,
+) -> Line<'static> {
+    let mut spans = vec![Span::styled(format!("{} ", glyphs.code_bar()), theme.dim())];
+    match highlighter {
+        // Styled but never altered: the characters are what the user copies,
+        // and highlighting only splits them into runs.
+        Some(highlighter) => spans.extend(highlighter.line(text, theme)),
+        None => spans.push(Span::styled(text.to_string(), Style::default().fg(theme.code))),
+    }
+    Line::from(spans)
 }
 
 /// One non-code line.
@@ -411,5 +425,39 @@ mod tests {
     #[test]
     fn an_empty_line_stays_empty() {
         assert_eq!(text_of(&render_default("a\n\nb")), vec!["a", "", "b"]);
+    }
+
+    #[test]
+    fn a_fenced_block_is_highlighted() {
+        // The wiring, not the highlighter: `code_line` has to receive the
+        // block's highlighter and use it, or every token renders in one colour
+        // and the whole feature is invisible.
+        let theme = Theme::new(crate::theme::ColorDepth::TrueColor);
+        let lines = render(
+            "```rust\nfn main() { let s = \"hi\"; }\n```",
+            &theme,
+            &crate::glyphs::UNICODE,
+        );
+
+        let colours: std::collections::HashSet<_> = lines
+            .iter()
+            .flat_map(|line| &line.spans)
+            .filter_map(|span| span.style.fg)
+            .collect();
+
+        assert!(
+            colours.len() >= 3,
+            "expected several token colours, got {colours:?}"
+        );
+    }
+
+    #[test]
+    fn a_fenced_block_keeps_its_text_exactly() {
+        // Highlighting splits a line into runs. If it ever alters one, the
+        // thing the user copies out of the transcript is wrong.
+        let theme = Theme::new(crate::theme::ColorDepth::TrueColor);
+        let lines = render("```rust\nlet x = 1;\n```", &theme, &crate::glyphs::UNICODE);
+        let body: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(body.ends_with("let x = 1;"), "got {body:?}");
     }
 }

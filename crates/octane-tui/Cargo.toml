@@ -15,6 +15,13 @@ octane-provider.workspace = true
 async-trait.workspace = true
 crossterm.workspace = true
 unicode-width = "0.2"
+# `regex-fancy`, never `regex-onig`: the onig path build-depends on a C
+# toolchain and is the engine behind Codex's 1,550-second CPU spin on a long
+# base64 line (openai/codex#33755).
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-fancy"] }
+# bat's syntax bundle. syntect's own set has no TypeScript, which is
+# disqualifying for a coding agent.
+two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 ratatui.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
