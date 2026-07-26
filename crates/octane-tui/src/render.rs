@@ -65,8 +65,17 @@ impl Default for RenderOptions {
 /// are handled by the live region rather than appended to scrollback. An event
 /// producing no lines is normal, not an error.
 pub fn render_event(event: &Event, options: &RenderOptions) -> Vec<Line<'static>> {
+    render_event_expanded(event, options, false)
+}
+
+/// As [`render_event`], but showing a tool result in full.
+pub fn render_event_expanded(
+    event: &Event,
+    options: &RenderOptions,
+    expanded: bool,
+) -> Vec<Line<'static>> {
     match event {
-        Event::Item(item_event) => render_item(item_event, options),
+        Event::Item(item_event) => render_item(item_event, options, expanded),
 
         Event::Compaction { before_tokens, after_tokens, strategy } => {
             // Surfaced deliberately. Silent context loss is the most confusing
@@ -88,7 +97,7 @@ pub fn render_event(event: &Event, options: &RenderOptions) -> Vec<Line<'static>
     }
 }
 
-fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>> {
+fn render_item(event: &ItemEvent, options: &RenderOptions, expanded: bool) -> Vec<Line<'static>> {
     // Only completed items reach scrollback. Anything in flight belongs in the
     // live region, where it can still change.
     let ItemEvent::Completed { item, .. } = event else {
@@ -186,16 +195,16 @@ fn render_item(event: &ItemEvent, options: &RenderOptions) -> Vec<Line<'static>>
                 None => title.clone(),
             };
 
-            // Named, because a step with several calls streams all of them
-            // before any result: the rows do not sit under the call they
-            // answer, so each has to say which one it is.
+            // The name is on the call line directly above; repeating it here
+            // said `list` twice on consecutive rows. Parallel calls are the
+            // case that motivated naming the result, and the body under it
+            // identifies those far better than a repeated tool name does.
             let mut lines = vec![Line::from(vec![
                 Span::styled(format!("  {marker} "), Style::default().fg(colour)),
-                Span::styled(format!("{name}  "), theme.dim()),
                 Span::styled(summary, theme.dim()),
             ])];
 
-            lines.extend(result_body(name, metadata.as_ref(), body, theme, glyphs));
+            lines.extend(result_body(name, metadata.as_ref(), body, theme, glyphs, expanded));
             lines
         }
 
@@ -268,6 +277,7 @@ fn result_body(
     output: &str,
     theme: &Theme,
     glyphs: &crate::glyphs::Glyphs,
+    expanded: bool,
 ) -> Vec<Line<'static>> {
     let text = |key: &str| {
         metadata.and_then(|m| m.get(key)).and_then(|v| v.as_str()).unwrap_or_default().to_string()
@@ -318,16 +328,19 @@ fn result_body(
                 _ => output.to_string(),
             };
             let total = source.lines().count();
+            let shown = if expanded { total } else { OUTPUT_PREVIEW_LINES };
             let mut lines: Vec<Line<'static>> = source
                 .lines()
-                .take(OUTPUT_PREVIEW_LINES)
+                .take(shown)
                 .map(|line| Line::styled(format!("      {}", sanitize(line)), theme.dim()))
                 .collect();
-            if total > OUTPUT_PREVIEW_LINES {
+            if total > shown {
                 lines.push(Line::styled(
-                    format!("      [+ {} more lines]", total - OUTPUT_PREVIEW_LINES),
+                    format!("      [+ {} more lines - ctrl+o or click]", total - shown),
                     theme.dim(),
                 ));
+            } else if expanded && total > OUTPUT_PREVIEW_LINES {
+                lines.push(Line::styled("      [ctrl+o or click to collapse]", theme.dim()));
             }
             lines
         }
@@ -790,9 +803,8 @@ mod tests {
         });
         let rendered = text_of(&render(&event));
 
-        // Names the tool, since a step with several calls streams every call
-        // before any result, and reports the size rather than the contents.
-        assert!(rendered.contains("read"));
+        // Reports the size rather than the contents. The tool name is on the
+        // call line above and is deliberately not repeated here.
         assert!(rendered.contains("62 lines"));
         assert!(!rendered.contains("<file"), "wire framing must not be shown");
     }
@@ -910,7 +922,7 @@ mod tests {
 
         assert!(rendered.contains("line 1"));
         assert!(!rendered.contains("line 30"), "it must not print everything");
-        assert!(rendered.contains("[+ 22 more lines]"));
+        assert!(rendered.contains("[+ 22 more lines"), "got {rendered:?}");
     }
 
     #[test]

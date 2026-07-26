@@ -18,9 +18,20 @@ use ratatui::text::Line;
 /// scrolls back through 200,000 lines. Old content is dropped from the front.
 pub const MAX_LINES: usize = 20_000;
 
+/// A run of lines produced by one item, so a click can find its way back.
+#[derive(Debug, Clone)]
+struct Region {
+    id: octane_protocol::ItemId,
+    start: usize,
+    len: usize,
+}
+
 #[derive(Debug, Default)]
 pub struct Transcript {
     lines: Vec<Line<'static>>,
+    /// Where each expandable item's lines live. Only items that can be
+    /// expanded are tracked; everything else is anonymous.
+    regions: Vec<Region>,
     /// Lines hidden above the viewport.
     scroll: usize,
     /// Whether new content should pull the view down.
@@ -39,6 +50,56 @@ impl Transcript {
         Self { following: true, ..Default::default() }
     }
 
+    /// Push lines and remember which item produced them.
+    pub fn push_owned(&mut self, id: octane_protocol::ItemId, lines: Vec<Line<'static>>) {
+        let len = lines.len();
+        self.push(lines);
+        // Measured after the push, because it may have evicted from the front
+        // and moved every index.
+        let start = self.lines.len().saturating_sub(len);
+        self.regions.push(Region { id, start, len });
+    }
+
+    /// The expandable item owning an absolute line index, if any.
+    pub fn owner_of(&self, line: usize) -> Option<octane_protocol::ItemId> {
+        self.regions
+            .iter()
+            .find(|region| line >= region.start && line < region.start + region.len)
+            .map(|region| region.id.clone())
+    }
+
+    /// The most recently pushed expandable item.
+    pub fn last_owner(&self) -> Option<octane_protocol::ItemId> {
+        self.regions.last().map(|region| region.id.clone())
+    }
+
+    /// Lines scrolled off the top, so a viewport row maps to an absolute index.
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll
+    }
+
+    /// Swap one item's lines for a new rendering, keeping everything else.
+    ///
+    /// Used by expand and collapse. Rebuilding the whole transcript instead
+    /// would discard the eviction history and the scroll position.
+    pub fn replace_region(&mut self, id: &octane_protocol::ItemId, lines: Vec<Line<'static>>) {
+        let Some(index) = self.regions.iter().position(|region| &region.id == id) else {
+            return;
+        };
+        let region = self.regions[index].clone();
+        let new_len = lines.len();
+        self.lines.splice(region.start..region.start + region.len, lines);
+
+        let delta = new_len as isize - region.len as isize;
+        self.regions[index].len = new_len;
+        for later in self.regions.iter_mut().skip(index + 1) {
+            later.start = (later.start as isize + delta).max(0) as usize;
+        }
+        if self.following {
+            self.scroll = self.lines.len().saturating_sub(self.viewport);
+        }
+    }
+
     pub fn push(&mut self, lines: Vec<Line<'static>>) {
         self.lines.extend(lines);
 
@@ -48,6 +109,12 @@ impl Transcript {
             // The window has shifted under the scroll position; move it with the
             // content so the user keeps looking at the same text.
             self.scroll = self.scroll.saturating_sub(excess);
+            // Regions index into `lines`, so they move too. One evicted out
+            // from under its own start is gone and must not be clicked.
+            self.regions.retain(|region| region.start + region.len > excess);
+            for region in &mut self.regions {
+                region.start = region.start.saturating_sub(excess);
+            }
         }
     }
 
@@ -71,6 +138,7 @@ impl Transcript {
     }
 
     pub fn clear(&mut self) {
+        self.regions.clear();
         self.lines.clear();
         self.pending.clear();
         self.scroll = 0;
@@ -405,5 +473,45 @@ mod tests {
         transcript.clear();
         assert!(transcript.is_empty());
         assert!(transcript.is_following());
+    }
+
+    #[test]
+    fn replacing_a_region_moves_the_ones_after_it() {
+        // Expanding grows a block in the middle of the transcript. Every later
+        // region indexes into the same vector, so their starts move with it or
+        // a click lands on the wrong item.
+        let mut transcript = Transcript::new();
+        let first = octane_protocol::ItemId::new();
+        let second = octane_protocol::ItemId::new();
+
+        transcript.push_owned(first.clone(), vec![Line::raw("a")]);
+        transcript.push_owned(second.clone(), vec![Line::raw("b")]);
+        assert_eq!(transcript.owner_of(0), Some(first.clone()));
+        assert_eq!(transcript.owner_of(1), Some(second.clone()));
+
+        // The first grows by two lines.
+        transcript.replace_region(
+            &first,
+            vec![Line::raw("a"), Line::raw("a2"), Line::raw("a3")],
+        );
+
+        assert_eq!(transcript.owner_of(0), Some(first.clone()));
+        assert_eq!(transcript.owner_of(2), Some(first));
+        assert_eq!(transcript.owner_of(3), Some(second), "the later region moved");
+    }
+
+    #[test]
+    fn an_evicted_region_cannot_be_clicked() {
+        // Regions index into `lines`, and the front is dropped past MAX_LINES.
+        // A stale region would map a click onto whatever text took its place.
+        let mut transcript = Transcript::new();
+        let doomed = octane_protocol::ItemId::new();
+        transcript.push_owned(doomed.clone(), vec![Line::raw("old")]);
+        transcript.push(vec![Line::raw("filler"); MAX_LINES]);
+
+        assert!(
+            transcript.owner_of(0) != Some(doomed),
+            "an evicted region must not still claim a line"
+        );
     }
 }

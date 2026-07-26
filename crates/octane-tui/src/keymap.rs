@@ -52,6 +52,8 @@ pub enum KeyAction {
     PickerCancel,
     /// Up one level, without the filter-clearing step Esc does first.
     PickerAscend,
+    /// Show or clip the most recent tool result.
+    ToggleLastOutput,
     /// Narrow the picker.
     PickerFilter(char),
     PickerUnfilter,
@@ -141,6 +143,9 @@ pub fn route(key: KeyEvent, ctx: &KeyContext<'_>) -> KeyAction {
         // Only when empty, so ctrl+d mid-draft does not discard a session.
         KeyCode::Char('d') if ctrl && ctx.composer_empty => KeyAction::Exit,
         KeyCode::Char('u') if ctrl => KeyAction::Clear,
+        // Expansion has to be reachable without a mouse: a mouse-only
+        // affordance would be the first thing in octane that is.
+        KeyCode::Char('o') if ctrl => KeyAction::ToggleLastOutput,
         KeyCode::Char('a') if ctrl => KeyAction::MoveLineStart,
         KeyCode::Char('e') if ctrl => KeyAction::MoveLineEnd,
 

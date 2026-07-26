@@ -96,6 +96,13 @@ pub struct App {
     /// on the user, none is, and the one thing that should draw the eye is the
     /// prompt.
     parked_activity: Option<crate::status::Activity>,
+    /// Tool results that can be shown in full, kept so a toggle can re-render
+    /// them. Only these are retained: everything else in the transcript is
+    /// already whole.
+    expandable: std::collections::HashMap<octane_protocol::ItemId, Event>,
+    expanded: std::collections::HashSet<octane_protocol::ItemId>,
+    /// The transcript's rectangle at the last draw, for mapping a click.
+    body_area: ratatui::layout::Rect,
     spinner_frame: usize,
     started: Instant,
 
@@ -171,6 +178,9 @@ impl App {
             files: Vec::new(),
             pending_approval: None,
             parked_activity: None,
+            expandable: std::collections::HashMap::new(),
+            expanded: std::collections::HashSet::new(),
+            body_area: ratatui::layout::Rect::default(),
             spinner_frame: 0,
             started: Instant::now(),
             workspace,
@@ -249,16 +259,10 @@ impl App {
                     self.streaming = None;
                     self.transcript.clear_pending();
                 }
-                let lines = render_event(event, &self.options);
-                if !lines.is_empty() {
-                    self.push_lines(lines);
-                }
+                self.push_rendered(event);
             }
             _ => {
-                let lines = render_event(event, &self.options);
-                if !lines.is_empty() {
-                    self.push_lines(lines);
-                }
+                self.push_rendered(event);
             }
         }
 
@@ -297,6 +301,40 @@ impl App {
             .collect();
 
         self.transcript.set_pending(lines);
+        self.dirty = true;
+    }
+
+    /// Render an event into the transcript, remembering it if it can expand.
+    ///
+    /// A tool result whose body was clipped is the only thing worth keeping:
+    /// re-rendering needs the event, and holding every event would grow
+    /// without bound in a long session.
+    fn push_rendered(&mut self, event: &Event) {
+        let lines = render_event(event, &self.options);
+        if lines.is_empty() {
+            return;
+        }
+        match expandable_id(event) {
+            Some(id) => {
+                self.expandable.insert(id.clone(), event.clone());
+                self.transcript.push_owned(id, lines);
+                self.dirty = true;
+            }
+            None => self.push_lines(lines),
+        }
+    }
+
+    /// Show or clip one tool result, re-rendering it in place.
+    fn toggle_expanded(&mut self, id: &octane_protocol::ItemId) {
+        let Some(event) = self.expandable.get(id).cloned() else { return };
+        let now = !self.expanded.contains(id);
+        if now {
+            self.expanded.insert(id.clone());
+        } else {
+            self.expanded.remove(id);
+        }
+        let lines = crate::render::render_event_expanded(&event, &self.options, now);
+        self.transcript.replace_region(id, lines);
         self.dirty = true;
     }
 
@@ -532,6 +570,23 @@ impl App {
                 match mouse.kind {
                     MouseEventKind::ScrollUp => self.transcript.scroll_up(3),
                     MouseEventKind::ScrollDown => self.transcript.scroll_down(3),
+                    // A click inside the transcript expands or clips the tool
+                    // result under it. The row is a viewport offset, so the
+                    // scroll position turns it back into an absolute line.
+                    MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                        let area = self.body_area;
+                        if mouse.row >= area.y
+                            && mouse.row < area.y + area.height
+                            && mouse.column >= area.x
+                            && mouse.column < area.x + area.width
+                        {
+                            let row = usize::from(mouse.row - area.y);
+                            let line = self.transcript.scroll_offset() + row;
+                            if let Some(id) = self.transcript.owner_of(line) {
+                                self.toggle_expanded(&id);
+                            }
+                        }
+                    }
                     _ => return Ok(None),
                 }
                 self.dirty = true;
@@ -716,6 +771,15 @@ impl App {
             // Left is unambiguous: it always means "up". Esc is layered and
             // clears a filter first, which is what the user wants from Esc and
             // not what they want from an arrow.
+            KeyAction::ToggleLastOutput => {
+                // The most recent one, which is what "expand that" means when
+                // there is no pointer to say which.
+                if let Some(id) = self.transcript.last_owner() {
+                    self.toggle_expanded(&id);
+                }
+                None
+            }
+
             KeyAction::PickerAscend => {
                 if self.pickers.len() > 1 {
                     self.pickers.pop();
@@ -996,6 +1060,17 @@ fn approval_height(prompt: &ApprovalPrompt) -> u16 {
         .map(|diff| u16::try_from(diff.lines().count()).unwrap_or(u16::MAX).min(12))
         .unwrap_or(0);
     2 + diff_rows
+}
+
+/// The item id of a tool result that could be shown in full.
+///
+/// Only tool results clip anything, so only they can expand.
+fn expandable_id(event: &Event) -> Option<octane_protocol::ItemId> {
+    let octane_protocol::Event::Item(octane_protocol::ItemEvent::Completed { item, .. }) = event
+    else {
+        return None;
+    };
+    matches!(item.kind, octane_protocol::ItemKind::ToolResult { .. }).then(|| item.id.clone())
 }
 
 fn is_reasoning(kind: &octane_protocol::ItemKind) -> bool {
