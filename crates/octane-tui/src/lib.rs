@@ -45,6 +45,7 @@ pub mod render;
 pub mod status;
 pub mod theme;
 pub mod transcript;
+pub mod wrap;
 
 pub use app::{App, AppEvent};
 pub use approval::{ApprovalPrompt, ApprovalReply, TuiApprover};

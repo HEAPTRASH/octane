@@ -449,7 +449,7 @@ impl App {
             // provider prints two errors, which replaced the guidance for the
             // one user who has never seen it before.
             if !self.conversing {
-                let mut lines = transcript.visible(body.height as usize);
+                let mut lines = transcript.visible(body.width as usize, body.height as usize);
                 if !lines.is_empty() {
                     lines.push(ratatui::text::Line::default());
                 }
@@ -457,7 +457,7 @@ impl App {
                 lines.extend(hints);
                 frame.render_widget(Paragraph::new(lines), body);
             } else {
-                let visible = transcript.visible(body.height as usize);
+                let visible = transcript.visible(body.width as usize, body.height as usize);
                 frame.render_widget(Paragraph::new(visible), body);
             }
 
