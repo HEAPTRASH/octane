@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10110f">
+  <meta name="description" content="Octane is a terminal-native AI coding agent in Rust: a streaming TUI, sandboxed tools, multi-provider models, MCP, and isolated subagents.">
+  <title>OCTANE // Terminal coding agent</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2310110f'/%3E%3Cpath d='M5 7h7v4h3V7h7v4h5v14h-8v-4h-3v4H9v-4H5V7Z' fill='%23b8f500'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <div class="boot-screen" aria-hidden="true">
+    <span>OCTANE</span>
+    <span class="boot-count">00</span>
+  </div>
+
+  <div class="grain" aria-hidden="true"></div>
+  <div class="crosshair" aria-hidden="true"></div>
+
+  <div class="signal-bar">
+    <p>
+      <span class="signal-pulse" aria-hidden="true"></span>
+      BRANCH SNAPSHOT / 27.07.2026
+    </p>
+    <p>752 PASS <span>/</span> 01 OPEN TUI REGRESSION</p>
+    <p class="signal-wide">EARLY BUILD / VERSION 0.0.0 / MIT</p>
+  </div>
+
+  <header class="site-header">
+    <a class="brand" href="#top" aria-label="Octane, back to top">
+      <svg viewBox="0 0 42 28" aria-hidden="true">
+        <path d="M2 4h9v5h4V4h9v5h4V4h12v20H28v-5h-4v5h-9v-5h-4v5H2V4Z"/>
+      </svg>
+      <span>OCTANE</span>
+    </a>
+
+    <button class="menu-button" type="button" aria-controls="site-nav" aria-expanded="false">
+      <span>MENU</span>
+      <span class="menu-icon" aria-hidden="true"></span>
+    </button>
+
+    <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+      <a href="#state"><span>01</span> State</a>
+      <a href="#system"><span>02</span> System</a>
+      <a href="#operation"><span>03</span> Operation</a>
+      <a href="#build"><span>04</span> Build</a>
+    </nav>
+
+    <a class="header-link magnetic" href="https://github.com/HEAPTRASH/octane" target="_blank" rel="noreferrer">
+      SOURCE
+      <span aria-hidden="true">↗</span>
+    </a>
+  </header>
+
+  <main id="main">
+    <section id="top" class="hero">
+      <div class="hero-rail" aria-hidden="true">
+        <span>RUST / TERMINAL / AGENT</span>
+        <span>40.0000° N — 26.0000° E</span>
+      </div>
+
+      <div class="hero-topline reveal">
+        <p>// AN AGENT THAT CODES IN YOUR TERMINAL</p>
+        <p>SYS.00 — EARLY / WORKING</p>
+      </div>
+
+      <div class="hero-word-wrap" aria-label="Octane">
+        <h1 class="hero-word" data-drift="0.10">OCTANE</h1>
+        <span class="hero-index">[00]</span>
+      </div>
+
+      <div class="hero-grid">
+        <div class="hero-statement reveal">
+          <p class="eyebrow">FULL POWER / HARD BOUNDARIES</p>
+          <h2>Give the model tools.<br>Keep the kernel in charge.</h2>
+        </div>
+
+        <div class="hero-copy reveal delay-1">
+          <p>
+            A terminal-native coding agent written in Rust. Octane runs the complete loop:
+            prompt, streamed tool call, contained execution, and answer—against real models.
+          </p>
+          <div class="hero-actions">
+            <a class="button button-solid magnetic" href="#state">
+              INSPECT THE BUILD <span aria-hidden="true">↓</span>
+            </a>
+            <a class="text-link" href="#build">BUILD LOCALLY <span aria-hidden="true">↘</span></a>
+          </div>
+        </div>
+      </div>
+
+      <figure class="product-shot reveal delay-2" data-tilt>
+        <div class="shot-topline">
+          <span>FIG. 01 / ACTUAL APPLICATION</span>
+          <span>RATATUI / MACOS TERMINAL</span>
+        </div>
+        <div class="shot-viewport">
+          <img
+            src="assets/octane-tui.png"
+            width="2824"
+            height="1944"
+            alt="The real Octane full-screen terminal application, showing its wordmark, command hints, composer, current model, and context status."
+          >
+          <span class="scanline" aria-hidden="true"></span>
+        </div>
+        <figcaption>
+          <span>CAPTURED FROM THE CURRENT DEBUG BUILD</span>
+          <span>NO UI MOCKUP / NO COMPOSITING</span>
+        </figcaption>
+      </figure>
+    </section>
+
+    <div class="marquee marquee-acid" aria-label="Project highlights">
+      <div class="marquee-track">
+        <div class="marquee-set">
+          <span>RUNS END TO END</span><i>◆</i>
+          <span>14 RUST CRATES</span><i>◆</i>
+          <span>8 NATIVE TOOLS</span><i>◆</i>
+          <span>KERNEL CONTAINED</span><i>◆</i>
+        </div>
+        <div class="marquee-set" aria-hidden="true">
+          <span>RUNS END TO END</span><i>◆</i>
+          <span>14 RUST CRATES</span><i>◆</i>
+          <span>8 NATIVE TOOLS</span><i>◆</i>
+          <span>KERNEL CONTAINED</span><i>◆</i>
+        </div>
+      </div>
+    </div>
+
+    <section id="state" class="section state-section">
+      <header class="section-heading reveal">
+        <span class="section-number">01</span>
+        <p class="eyebrow">CURRENT STATE / NOT A ROADMAP</p>
+        <h2>What works<br><span>right now.</span></h2>
+        <p class="heading-note">
+          Source-inspected and locally checked on 27 July 2026.
+          Early software, reported without sanding down the edges.
+        </p>
+      </header>
+
+      <div class="verification-grid">
+        <article class="test-block test-pass reveal">
+          <p class="metric-label">LOCAL WORKSPACE CHECK</p>
+          <p class="metric"><span data-count="752">752</span><sup>PASS</sup></p>
+          <p>Checks completed before the active TUI suite stopped on one regression.</p>
+        </article>
+        <article class="test-block test-open reveal delay-1">
+          <p class="metric-label">OPEN REGRESSION</p>
+          <p class="metric"><span data-count="1">01</span><sup>FAIL</sup></p>
+          <p><code>diff_headers_are_not_coloured_as_content</code></p>
+        </article>
+        <aside class="verification-note reveal delay-2">
+          <span class="stamp">HONEST<br>STATUS</span>
+          <p>
+            The HTTP integration checks pass when allowed to bind localhost.
+            The current blocker is a TUI diff-header color assertion—not the core turn loop.
+          </p>
+        </aside>
+      </div>
+
+      <div class="state-table">
+        <div class="state-row reveal">
+          <span class="state-code">CORE/01</span>
+          <div>
+            <h3>Turn loop</h3>
+            <p>Prompt assembly → streamed model output → tool dispatch → contained execution → final answer.</p>
+          </div>
+          <span class="state-status ready">OPERATIONAL</span>
+        </div>
+        <div class="state-row reveal">
+          <span class="state-code">TOOL/08</span>
+          <div>
+            <h3>Native tools + subagents</h3>
+            <p>Read, edit, write, bash, grep, glob, list, and isolated task delegation.</p>
+          </div>
+          <span class="state-status ready">OPERATIONAL</span>
+        </div>
+        <div class="state-row reveal">
+          <span class="state-code">MCP/IO</span>
+          <div>
+            <h3>MCP over stdio</h3>
+            <p>Servers start once, negotiate, and enter the same tool registry and permission engine.</p>
+          </div>
+          <span class="state-status ready">WIRED</span>
+        </div>
+        <div class="state-row reveal">
+          <span class="state-code">CMD/FS</span>
+          <div>
+            <h3>File slash commands</h3>
+            <p>Project and user commands share one protected namespace with approved shell expansion.</p>
+          </div>
+          <span class="state-status ready">WIRED</span>
+        </div>
+        <div class="state-row reveal">
+          <span class="state-code">SKL/T1</span>
+          <div>
+            <h3>Skills in model context</h3>
+            <p>Skills are discoverable from slash commands; tier-one manifest and model activation are not wired.</p>
+          </div>
+          <span class="state-status partial">PARTIAL</span>
+        </div>
+        <div class="state-row reveal">
+          <span class="state-code">OS/03</span>
+          <div>
+            <h3>Cross-platform containment</h3>
+            <p>Seatbelt is live on macOS. Linux and Windows fail closed until their backends exist.</p>
+          </div>
+          <span class="state-status partial">MACOS ONLY</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="numbers" aria-label="Project numbers">
+      <div class="number-cell reveal">
+        <span>14</span>
+        <p>CRATES<br>ONE-WAY LAYERS</p>
+      </div>
+      <div class="number-cell reveal delay-1">
+        <span>08</span>
+        <p>NATIVE<br>TOOLS</p>
+      </div>
+      <div class="number-cell reveal delay-2">
+        <span>04</span>
+        <p>PROVIDER<br>WIRE FORMATS</p>
+      </div>
+      <div class="number-cell reveal delay-3">
+        <span>01</span>
+        <p>CONTAINED<br>OS TODAY</p>
+      </div>
+    </section>
+
+    <section id="system" class="section system-section">
+      <header class="section-heading section-heading-light reveal">
+        <span class="section-number">02</span>
+        <p class="eyebrow">ARCHITECTURE / STRICTLY ONE WAY</p>
+        <h2>Small parts.<br><span>Sharp contracts.</span></h2>
+      </header>
+
+      <div class="system-grid">
+        <article class="system-card system-card-wide reveal">
+          <div class="card-index">01 / CONTAINMENT</div>
+          <h3>Policy asks permission.<br>Seatbelt limits reality.</h3>
+          <p>
+            Octane evaluates allow / ask / deny before execution, then wraps commands in
+            macOS kernel rules. Workspace writes do not transitively grant access to
+            <code>.git/</code>, agent configuration, or the network.
+          </p>
+          <div class="boundary-diagram" aria-label="Policy and containment boundary">
+            <span>MODEL INTENT</span>
+            <i>→</i>
+            <span>POLICY</span>
+            <i>→</i>
+            <span>SEATBELT</span>
+            <i>→</i>
+            <span>PROCESS</span>
+          </div>
+        </article>
+
+        <article class="system-card reveal delay-1">
+          <div class="card-index">02 / TERMINAL</div>
+          <h3>One full-screen surface.</h3>
+          <p>
+            Header, transcript, approval, activity, composer, and status are pure panes.
+            Follow-tail pauses when you scroll and resumes when you return.
+          </p>
+          <span class="card-mark">TUI</span>
+        </article>
+
+        <article class="system-card reveal delay-2">
+          <div class="card-index">03 / PROVIDERS</div>
+          <h3>Four formats. Many models.</h3>
+          <p>
+            OpenAI Completions, OpenAI Responses, Anthropic, and Google formats cover
+            direct providers, gateways, local runtimes, and Vertex.
+          </p>
+          <ul class="micro-list">
+            <li>OPENROUTER</li><li>ANTHROPIC</li><li>OPENAI</li>
+            <li>GEMINI</li><li>OLLAMA</li><li>AWS SIGV4</li>
+          </ul>
+        </article>
+
+        <article class="system-card reveal">
+          <div class="card-index">04 / CONTEXT</div>
+          <h3>Spend context on the work.</h3>
+          <p>
+            Old tool output is pruned first. Compaction preserves the cached prefix,
+            recent turns, and complete tool exchanges.
+          </p>
+          <div class="context-meter" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span>
+          </div>
+        </article>
+
+        <article class="system-card system-card-wide reveal delay-1">
+          <div class="card-index">05 / EXTENSION</div>
+          <h3>One registry. No weaker side door.</h3>
+          <p>
+            Built-ins, MCP tools, and the task tool resolve through the same sorted registry.
+            MCP effects are treated as mutating, and plan mode withholds them.
+          </p>
+          <div class="registry-stack" aria-hidden="true">
+            <span>NATIVE TOOLS</span>
+            <span>MCP TOOLS</span>
+            <span>TASK / SUBAGENTS</span>
+            <strong>POLICY ENGINE</strong>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <div class="marquee marquee-dark" aria-label="Native tools">
+      <div class="marquee-track marquee-reverse">
+        <div class="marquee-set">
+          <span>READ</span><i>/</i><span>EDIT</span><i>/</i><span>WRITE</span><i>/</i>
+          <span>BASH</span><i>/</i><span>GREP</span><i>/</i><span>GLOB</span><i>/</i>
+          <span>LIST</span><i>/</i><span>TASK</span><i>/</i>
+        </div>
+        <div class="marquee-set" aria-hidden="true">
+          <span>READ</span><i>/</i><span>EDIT</span><i>/</i><span>WRITE</span><i>/</i>
+          <span>BASH</span><i>/</i><span>GREP</span><i>/</i><span>GLOB</span><i>/</i>
+          <span>LIST</span><i>/</i><span>TASK</span><i>/</i>
+        </div>
+      </div>
+    </div>
+
+    <section id="operation" class="section operation-section">
+      <header class="section-heading reveal">
+        <span class="section-number">03</span>
+        <p class="eyebrow">OPERATION / A SINGLE TURN</p>
+        <h2>The fast path<br><span>stays visible.</span></h2>
+      </header>
+
+      <ol class="operation-list">
+        <li class="operation-item reveal">
+          <span class="operation-number">01</span>
+          <h3>ASK</h3>
+          <p>Type a task, attach a file with <code>@path</code>, or invoke a slash command.</p>
+          <span class="operation-glyph" aria-hidden="true">↘</span>
+        </li>
+        <li class="operation-item reveal delay-1">
+          <span class="operation-number">02</span>
+          <h3>GUARD</h3>
+          <p>The requested actions meet mode, policy, and kernel containment before they run.</p>
+          <span class="operation-glyph" aria-hidden="true">↘</span>
+        </li>
+        <li class="operation-item reveal delay-2">
+          <span class="operation-number">03</span>
+          <h3>STREAM</h3>
+          <p>Reasoning, text, and tool events arrive as structured events in a stable TUI.</p>
+          <span class="operation-glyph" aria-hidden="true">↘</span>
+        </li>
+        <li class="operation-item reveal delay-3">
+          <span class="operation-number">04</span>
+          <h3>VERIFY</h3>
+          <p>Tool results feed the next step until the model completes or a safety bound stops it.</p>
+          <span class="operation-glyph" aria-hidden="true">■</span>
+        </li>
+      </ol>
+    </section>
+
+    <section id="build" class="section build-section">
+      <div class="build-copy reveal">
+        <span class="section-number">04</span>
+        <p class="eyebrow">LOCAL BUILD / NIX-PINNED</p>
+        <h2>Enter the<br>machine.</h2>
+        <p>
+          The flake owns the Rust toolchain. Clone, enter the development shell,
+          and build the current branch. No global rustup is required.
+        </p>
+        <a class="button button-outline magnetic" href="https://github.com/HEAPTRASH/octane" target="_blank" rel="noreferrer">
+          VIEW SOURCE <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+
+      <div class="command-panel reveal delay-1">
+        <div class="command-panel-head">
+          <span>BOOT SEQUENCE / ZSH</span>
+          <button class="copy-button" type="button" data-copy="git clone https://github.com/HEAPTRASH/octane.git&#10;cd octane&#10;direnv allow&#10;cargo build --release&#10;./target/release/octane">
+            COPY
+          </button>
+        </div>
+        <pre><code><span>01</span> git clone https://github.com/HEAPTRASH/octane.git
+<span>02</span> cd octane
+<span>03</span> direnv allow
+<span>04</span> cargo build --release
+<span>05</span> ./target/release/octane</code></pre>
+        <div class="command-panel-foot">
+          <span>NIX FLAKES REQUIRED</span>
+          <span>RUST 2024 EDITION</span>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-word" data-drift="-0.06" aria-hidden="true">OCTANE</div>
+    <div class="footer-grid">
+      <p>TERMINAL-NATIVE<br>AI CODING AGENT</p>
+      <p>RUST / MIT<br>VERSION 0.0.0</p>
+      <a href="#top">BACK TO TOP ↑</a>
+      <p>BUCHAREST<br>2026</p>
+    </div>
+  </footer>
+
+  <script src="script.js"></script>
+</body>
+</html>
