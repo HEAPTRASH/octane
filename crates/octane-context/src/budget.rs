@@ -21,9 +21,6 @@ pub enum Pressure {
     Exceeded,
 }
 
-impl Pressure {
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Budget {
     /// Window minus reserved output space.

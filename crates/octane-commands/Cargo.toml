@@ -12,7 +12,9 @@ camino.workspace = true
 serde.workspace = true
 serde_yaml = "0.9"
 thiserror.workspace = true
-tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

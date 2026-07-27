@@ -52,7 +52,6 @@ pub struct ModelRequest {
     pub tools: Vec<ToolSchema>,
     pub max_output_tokens: u64,
     pub temperature: Option<f32>,
-    pub top_p: Option<f32>,
     /// How much the model should think. Each format spells this differently,
     /// and not every endpoint honours `Off` — see [`crate::thinking`].
     pub thinking: crate::thinking::Thinking,
@@ -77,10 +76,6 @@ pub trait LanguageModel: Send + Sync {
     /// Start an inference call. Returns immediately with a stream; the caller
     /// drives it and decides what to persist and publish.
     async fn stream(&self, request: ModelRequest) -> Result<ModelStream, ProviderError>;
-
-    /// Best-effort token count for budgeting. Exact counts come back in usage;
-    /// this only has to be good enough to decide when to compact.
-    fn estimate_tokens(&self, messages: &[Message]) -> u64;
 }
 
 /// Resolves a model on demand.

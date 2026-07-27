@@ -22,3 +22,6 @@
 
 # macOS
 .DS_Store
+
+# Scratch worktrees created by parallel design agents.
+.claude/worktrees/

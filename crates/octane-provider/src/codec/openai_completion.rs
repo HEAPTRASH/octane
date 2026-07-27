@@ -123,9 +123,6 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     if let Some(temperature) = request.temperature.or(model.temperature) {
         body["temperature"] = json!(temperature);
     }
-    if let Some(top_p) = request.top_p {
-        body["top_p"] = json!(top_p);
-    }
 
     // The flat `reasoning_effort` is OpenAI's spelling and is accepted by
     // OpenRouter too, verified against it — so one form covers both rather than

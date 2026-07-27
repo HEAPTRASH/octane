@@ -54,14 +54,6 @@ impl ApiType {
             Self::Google => "",
         }
     }
-
-    /// Whether this format streams tool calls.
-    ///
-    /// Google does not, so a caller must buffer the whole response before it can
-    /// dispatch a tool. Encoded here rather than discovered as a mystery bug.
-    pub fn streams_tool_calls(self) -> bool {
-        !matches!(self, Self::Google)
-    }
 }
 
 impl std::fmt::Display for ApiType {
@@ -132,13 +124,5 @@ mod tests {
     fn an_unknown_type_names_itself() {
         let error = "cohere".parse::<ApiType>().unwrap_err();
         assert!(error.contains("cohere"));
-    }
-
-    #[test]
-    fn google_is_flagged_as_not_streaming_tool_calls() {
-        // A caller has to buffer for it; better stated than discovered.
-        assert!(!ApiType::Google.streams_tool_calls());
-        assert!(ApiType::Anthropic.streams_tool_calls());
-        assert!(ApiType::OpenAiCompletion.streams_tool_calls());
     }
 }

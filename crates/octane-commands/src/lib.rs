@@ -27,10 +27,12 @@
 pub mod command;
 pub mod discovery;
 pub mod expand;
+pub mod registry;
 
 pub use command::{Command, CommandFrontmatter};
 pub use discovery::discover;
 pub use expand::{Expansion, ShellRequest, expand};
+pub use registry::{Builtin, Entry, Kind, Registry};
 
 /// Directory name searched under both the project and user config roots.
 pub const COMMANDS_DIR: &str = "commands";
@@ -45,6 +47,9 @@ pub enum CommandError {
 
     #[error("unknown command /{0}")]
     Unknown(String),
+
+    #[error("{path}: /{name} is a built-in command and cannot be redefined")]
+    ShadowsBuiltin { name: String, path: String },
 
     #[error("/{name} requires at least {expected} argument(s), got {actual}")]
     MissingArguments { name: String, expected: usize, actual: usize },

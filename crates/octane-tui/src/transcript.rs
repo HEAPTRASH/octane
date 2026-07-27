@@ -10,6 +10,11 @@
 //! following, because content jumping away mid-read is the single most annoying
 //! thing a log pane can do. Scrolling back to the bottom resumes following.
 
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Constraint, Rect};
+use ratatui::style::Style;
+use ratatui::widgets::{Block, Clear, Paragraph, Widget};
+
 use ratatui::text::Line;
 
 /// Lines retained.
@@ -116,39 +121,22 @@ impl Transcript {
         // push is O(n) per push and O(n^2) over a session, on a transcript
         // bounded at twenty thousand lines.
         for line in lines {
-            let start = self.lines.len();
-            if self.width == 0 {
-                self.lines.push(line.clone());
-            } else {
-                self.lines.extend(crate::wrap::wrap_line(&line, self.width));
-            }
-            let len = self.lines.len() - start;
-            if let Some(id) = &owner {
-                match self.regions.last_mut() {
-                    Some(last) if &last.id == id && last.start + last.len == start => {
-                        last.len += len
-                    }
-                    _ => self.regions.push(Region { id: id.clone(), start, len }),
-                }
-            }
+            self.wrap_into(owner.as_ref(), &line);
             self.logical.push((owner.clone(), line));
         }
 
         if self.logical.len() > MAX_LINES {
             let excess = self.logical.len() - MAX_LINES;
-            // How many *rows* the dropped lines occupied, which is what the
-            // scroll offset is measured in.
-            let dropped_rows: usize = self.logical[..excess]
-                .iter()
-                .map(|(_, line)| {
-                    if self.width == 0 { 1 } else { crate::wrap::wrap_line(line, self.width).len() }
-                })
-                .sum();
+            // The scroll offset is measured in *rows*, so what matters is how
+            // many rows went away. `rewrap` re-derives from what is left at the
+            // same width, which makes the difference exactly that count — no
+            // second wrap of the lines being discarded.
+            let before = self.lines.len();
             self.logical.drain(..excess);
             self.rewrap();
             // The window has shifted under the offset; move it with the content
             // so the user keeps looking at the same text.
-            self.scroll = self.scroll.saturating_sub(dropped_rows);
+            self.scroll = self.scroll.saturating_sub(before - self.lines.len());
         }
 
         if self.following {
@@ -156,35 +144,39 @@ impl Transcript {
         }
     }
 
-    /// Rebuild the wrapped view and the regions from the logical lines.
+    /// Wrap one logical line onto the end of the view, extending its region.
     ///
-    /// Both are derived, so this is the only place either is written. Wrapping
-    /// changes how many rows a logical line occupies, and regions are measured
-    /// in rows, so recomputing one without the other puts clicks on the wrong
-    /// item.
-    fn rewrap(&mut self) {
-        let width = self.width;
-        self.lines.clear();
-        self.regions.clear();
-
-        for (owner, line) in &self.logical {
-            let start = self.lines.len();
-            if width == 0 {
-                self.lines.push(line.clone());
-            } else {
-                self.lines.extend(crate::wrap::wrap_line(line, width));
-            }
-            let len = self.lines.len() - start;
-            if let Some(id) = owner {
-                match self.regions.last_mut() {
-                    // Consecutive rows from one item are one region.
-                    Some(last) if &last.id == id && last.start + last.len == start => {
-                        last.len += len
-                    }
-                    _ => self.regions.push(Region { id: id.clone(), start, len }),
-                }
+    /// The only writer of `lines` and `regions`. Wrapping changes how many rows
+    /// a logical line occupies, and regions are measured in rows, so appending
+    /// to one without the other puts clicks on the wrong item.
+    fn wrap_into(&mut self, owner: Option<&octane_protocol::ItemId>, line: &Line<'static>) {
+        let start = self.lines.len();
+        if self.width == 0 {
+            self.lines.push(line.clone());
+        } else {
+            self.lines.extend(crate::wrap::wrap_line(line, self.width));
+        }
+        let len = self.lines.len() - start;
+        if let Some(id) = owner {
+            match self.regions.last_mut() {
+                // Consecutive rows from one item are one region.
+                Some(last) if &last.id == id && last.start + last.len == start => last.len += len,
+                _ => self.regions.push(Region { id: id.clone(), start, len }),
             }
         }
+    }
+
+    /// Rebuild the wrapped view and the regions from the logical lines.
+    fn rewrap(&mut self) {
+        self.lines.clear();
+        self.regions.clear();
+        // Moved out and back: iterating `logical` borrows it while the wrap
+        // needs `&mut self`. Nothing else can observe the gap.
+        let logical = std::mem::take(&mut self.logical);
+        for (owner, line) in &logical {
+            self.wrap_into(owner.as_ref(), line);
+        }
+        self.logical = logical;
     }
 
 
@@ -293,19 +285,45 @@ impl Transcript {
         self.following = true;
         self.scroll = self.max_scroll(self.viewport);
     }
+}
 
-    /// Scroll position as a 0.0-1.0 fraction, for a scrollbar.
-    pub fn progress(&self) -> f64 {
-        let limit = self.max_scroll(self.viewport);
-        if limit == 0 {
-            return 1.0;
-        }
-        self.scroll as f64 / limit as f64
+/// Rows the transcript keeps for itself no matter how large the draft grows.
+///
+/// Without a floor, a long draft squeezes the transcript to nothing and the user
+/// loses sight of what they are replying to.
+pub const MIN_ROWS: u16 = 3;
+
+/// The transcript as a pane: already-wrapped lines, ready to draw.
+///
+/// It holds lines rather than a [`Transcript`] because wrapping mutates the
+/// cache — `visible` needs `&mut self` — and a pane renders from `&self`. So the
+/// lines are computed for the frame and handed in, which is also what lets the
+/// empty-state hints be appended to startup notices rather than replacing them.
+#[derive(Debug, Clone)]
+pub struct TranscriptView<'a> {
+    pub lines: Vec<Line<'a>>,
+    pub style: Style,
+}
+
+impl crate::component::Pane for TranscriptView<'_> {
+    fn constraint(&self, _width: u16) -> Constraint {
+        // The one pane that takes what is left rather than what it needs.
+        Constraint::Min(MIN_ROWS)
     }
 
-    /// Whether content extends past the viewport in either direction.
-    pub fn overflows(&self) -> bool {
-        self.len() > self.viewport
+    fn render(&self, area: Rect, buf: &mut Buffer) {
+        // Clear first: `Paragraph` writes only the cells it covers, so a line
+        // shorter than the one it replaces would leave the old tail behind.
+        // Then restore the canvas, because `Clear` intentionally resets styles.
+        Clear.render(area, buf);
+        Block::default().style(self.style).render(area, buf);
+        // ponytail: clones the frame's visible lines because `Paragraph` wants
+        // them owned and `render` only has `&self`. Bounded by terminal height
+        // and only on a dirty frame; if it ever shows up in a profile, ratatui's
+        // `WidgetRef` lets the paragraph be built once and drawn by reference.
+        Paragraph::new(self.lines.clone())
+            .style(self.style)
+            .render(area, buf);
     }
 }
 
@@ -456,31 +474,6 @@ mod tests {
         // The scroll offset must move with the dropped content, or the pane
         // silently jumps while the user is reading it.
         assert_eq!(text_of(&transcript.visible(200, 10)), before);
-    }
-
-    #[test]
-    fn overflow_is_reported_so_a_scrollbar_can_be_hidden() {
-        let mut transcript = Transcript::new();
-        transcript.push(lines(0..3));
-        transcript.visible(200, 10);
-        assert!(!transcript.overflows());
-
-        transcript.push(lines(3..50));
-        transcript.visible(200, 10);
-        assert!(transcript.overflows());
-    }
-
-    #[test]
-    fn progress_spans_top_to_bottom() {
-        let mut transcript = Transcript::new();
-        transcript.push(lines(0..100));
-        transcript.visible(200, 10);
-
-        transcript.scroll_to_top();
-        assert_eq!(transcript.progress(), 0.0);
-
-        transcript.scroll_to_bottom();
-        assert_eq!(transcript.progress(), 1.0);
     }
 
     #[test]

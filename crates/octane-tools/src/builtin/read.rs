@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::Deserialize;
 
-use crate::content::{image_kind, looks_binary};
+use crate::content::{clip_line, image_kind, looks_binary};
 use crate::paths::{self, ResolvedPath};
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutcome};
 use crate::tracker::FileTracker;
@@ -42,14 +42,9 @@ struct Input {
     limit: Option<usize>,
 }
 
+#[derive(Debug)]
 pub struct ReadTool {
     tracker: Arc<FileTracker>,
-}
-
-impl std::fmt::Debug for ReadTool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReadTool").finish_non_exhaustive()
-    }
 }
 
 impl ReadTool {
@@ -165,12 +160,7 @@ impl Tool for ReadTool {
 
         for (index, line) in lines[start..end].iter().enumerate() {
             let number = start + index + 1;
-            let rendered = if line.chars().count() > MAX_LINE_LENGTH {
-                let cut: String = line.chars().take(MAX_LINE_LENGTH).collect();
-                format!("{cut}… [line truncated]")
-            } else {
-                (*line).to_string()
-            };
+            let rendered = clip_line(line, MAX_LINE_LENGTH);
             out.push_str(&format!("{number:>6}\t{rendered}\n"));
         }
 

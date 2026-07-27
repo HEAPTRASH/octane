@@ -9,6 +9,7 @@
 //! staleness checks, output truncation, and error messages phrased so the model
 //! can act on them. Those are what these modules are mostly made of.
 
+pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod glob;
@@ -17,6 +18,7 @@ pub mod list;
 pub mod read;
 pub mod write;
 
+pub use apply_patch::ApplyPatchTool;
 pub use bash::BashTool;
 pub use edit::EditTool;
 pub use glob::GlobTool;
@@ -37,7 +39,10 @@ pub fn register_all(
 ) {
     registry.register(std::sync::Arc::new(ReadTool::new(tracker.clone())));
     registry.register(std::sync::Arc::new(WriteTool::new(tracker.clone())));
-    registry.register(std::sync::Arc::new(EditTool::new(tracker)));
+    registry.register(std::sync::Arc::new(EditTool::new(tracker.clone())));
+    // Shares the tracker for the same reason `edit` does: a patch written
+    // against a file nobody read is a guess.
+    registry.register(std::sync::Arc::new(ApplyPatchTool::new(tracker)));
     registry.register(std::sync::Arc::new(BashTool::new(sandbox)));
 
     // Search tools are stateless: they read the filesystem directly and hold

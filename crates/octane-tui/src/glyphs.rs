@@ -11,7 +11,7 @@
 //! | Range | Block | Used for |
 //! |---|---|---|
 //! | `U+2500`–`U+257F` | Box Drawing | frames, rules, separators |
-//! | `U+2580`–`U+259F` | Block Elements | the logo, meters, shading |
+//! | `U+2580`–`U+259F` | Block Elements | the logo, shading |
 //! | `U+25A0`–`U+25FF` | Geometric Shapes | bullets, state markers |
 //! | `U+2800`–`U+28FF` | Braille Patterns | spinners |
 //! | `U+2190`–`U+21FF` | Arrows | token counters, hints |
@@ -19,8 +19,10 @@
 //! Deliberately excluded:
 //!
 //! - **Emoji** (`U+1F300`+) — double-width, and rendering varies wildly.
-//! - **Nerd Font glyphs** (`U+E000`–`U+F8FF`, private use) — require a patched
-//!   font. Shipping a UI that looks broken without one is a bad default.
+//! - **Nerd Font glyphs** (`U+E000`–`U+F8FF`, private use) — as a *default*.
+//!   They require a patched font, and a UI that renders as tofu boxes for
+//!   everyone without one is a bad thing to ship by default. They are available
+//!   as an opt-in third set, [`NERD`]; see its own note on what that costs.
 //! - **Emoji-presentation symbols** like `⚡` (`U+26A1`) and `✔` (`U+2714`).
 //!   These *look* like ordinary symbols but default to emoji presentation in many
 //!   terminals, which makes them double-width. `✓` (`U+2713`) is text
@@ -64,8 +66,22 @@ pub struct Glyphs {
     /// Output tokens.
     pub arrow_down: &'static str,
 
+    /// Elision marker for a line that did not fit.
+    ///
+    /// The one member of this struct that is not a single cell: the ASCII form
+    /// is three columns where the Unicode one is one. Anything drawing it must
+    /// subtract `ellipsis.chars().count()` from its budget rather than assume a
+    /// column, which is what [`crate::render::truncate`] does.
+    pub ellipsis: &'static str,
+
     /// List bullet.
     pub bullet: &'static str,
+    /// Elbow that hangs a tool's output under the call that produced it.
+    ///
+    /// One cell in both sets, so the gutter's left edge is a straight column
+    /// whichever set is active — the whole point of hanging output under a
+    /// header rather than beside it.
+    pub elbow: &'static str,
     /// Left margin for code blocks and quotes.
     pub bar: &'static str,
 
@@ -75,8 +91,6 @@ pub struct Glyphs {
 
     /// Spinner frames.
     pub spinner: &'static [&'static str],
-    /// Meter fill levels, empty to full.
-    pub meter: &'static [&'static str],
 }
 
 /// The full set. Every glyph is single-width in every terminal tested.
@@ -97,7 +111,10 @@ pub const UNICODE: Glyphs = Glyphs {
     arrow_up: "\u{2191}",   // ↑
     arrow_down: "\u{2193}", // ↓
 
+    ellipsis: "\u{2026}", // … horizontal ellipsis, one cell
+
     bullet: "\u{2022}", // •
+    elbow: "\u{2514}",  // └
     bar: "\u{2502}",    // │
 
     claw: "\u{2571}", // ╱ box drawing diagonal
@@ -107,12 +124,6 @@ pub const UNICODE: Glyphs = Glyphs {
     spinner: &[
         "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
         "\u{2827}", "\u{2807}", "\u{280f}",
-    ],
-
-    // Lower block elements, one-eighth steps.
-    meter: &[
-        " ", "\u{2581}", "\u{2582}", "\u{2583}", "\u{2584}", "\u{2585}", "\u{2586}", "\u{2587}",
-        "\u{2588}",
     ],
 };
 
@@ -137,13 +148,68 @@ pub const ASCII: Glyphs = Glyphs {
     arrow_up: "^",
     arrow_down: "v",
 
+    ellipsis: "...",
+
     bullet: "*",
+    elbow: "\\",
     bar: "|",
 
     claw: "/",
 
     spinner: &["-", "\\", "|", "/"],
-    meter: &[" ", ".", ":", "-", "=", "+", "*", "#", "#"],
+};
+
+/// Nerd Font markers, for a terminal running a patched font.
+///
+/// **Opt-in, never detected.** There is no reliable way to ask a terminal
+/// whether its font is patched — the glyphs live in the Private Use Area, so a
+/// font without them renders tofu rather than failing in any way a program can
+/// see. Guessing wrong produces a screen of empty boxes, so this is only ever
+/// chosen deliberately.
+///
+/// Only the *markers* change. Rules, bars, the elbow and the braille spinner
+/// stay as they are: those are ordinary Unicode, every patched font includes
+/// them unchanged, and swapping them would put the layout's geometry at the
+/// mercy of a font this crate cannot measure.
+///
+/// Codepoints are from the Nerd Fonts project's own `glyphnames.json`, and all
+/// sit in the classic plane — the Material Design additions at `U+F0000`+ need
+/// a v3 font, which is a narrower promise than this set wants to make.
+///
+/// Widths are **not** covered by `every_marker_is_one_cell`. `unicode_width`
+/// reports PUA codepoints as neutral, so that test would assert nothing here;
+/// the single-cell property is a promise of the font, not of this table.
+pub const NERD: Glyphs = Glyphs {
+    // oct-chevron_right, matching the `\u{203a}` it replaces.
+    prompt: "\u{f460}",
+    // oct-terminal: a tool call is a command that ran.
+    tool: "\u{f489}",
+    // fa-pencil.
+    edit: "\u{f040}",
+    // oct-x, not fa-times: the octicon set is drawn on the same grid as the
+    // check below, so the two markers are the same visual weight.
+    error: "\u{f467}",
+    // oct-question.
+    question: "\u{f420}",
+    // oct-info.
+    notice: "\u{f449}",
+    // oct-check.
+    ok: "\u{f42e}",
+    radio_on: "\u{25cf}",  // ● black circle, reused from `tool`
+    radio_off: "\u{25cb}", // ○ white circle, same block and width
+    rule: "\u{2500}",      // ─
+    separator: "\u{00b7}", // ·
+    arrow_up: "\u{2191}",   // ↑
+    arrow_down: "\u{2193}", // ↓
+    ellipsis: "\u{2026}", // … horizontal ellipsis, one cell
+    bullet: "\u{2022}", // •
+    elbow: "\u{2514}",  // └
+    bar: "\u{2502}",    // │
+    claw: "\u{2571}", // ╱ box drawing diagonal
+    spinner: &[
+        "\u{280b}", "\u{2819}", "\u{2839}", "\u{2838}", "\u{283c}", "\u{2834}", "\u{2826}",
+        "\u{2827}", "\u{2807}", "\u{280f}",
+    ],
 };
 
 impl Glyphs {
@@ -183,32 +249,6 @@ impl Glyphs {
     pub fn claw_mark(&self) -> String {
         self.claw.repeat(3)
     }
-
-    /// Render a 0.0-1.0 fraction as a bar of `width` cells.
-    ///
-    /// Uses partial blocks for the leading cell, so a bar moves smoothly rather
-    /// than jumping a full character at a time.
-    pub fn bar(&self, fraction: f64, width: usize) -> String {
-        let fraction = fraction.clamp(0.0, 1.0);
-        let steps = self.meter.len() - 1;
-        let total = (fraction * (width * steps) as f64).round() as usize;
-
-        let full = total / steps;
-        let partial = total % steps;
-
-        let mut out = String::with_capacity(width * 3);
-        for _ in 0..full.min(width) {
-            out.push_str(self.meter[steps]);
-        }
-        if full < width && partial > 0 {
-            out.push_str(self.meter[partial]);
-        }
-        let drawn = full.min(width) + usize::from(full < width && partial > 0);
-        for _ in drawn..width {
-            out.push_str(self.meter[0]);
-        }
-        out
-    }
 }
 
 #[cfg(test)]
@@ -221,6 +261,41 @@ mod tests {
     /// module allows is already excluded by construction.
     fn single_width(glyph: &str) -> bool {
         glyph.chars().count() == 1
+    }
+
+    /// Every marker the Nerd set replaces has a counterpart in the others, and
+    /// every structural glyph is shared with `UNICODE` rather than re-chosen.
+    ///
+    /// Widths are deliberately unasserted: `unicode_width` reports Private Use
+    /// codepoints as neutral, so a width test here would pass on a font that
+    /// renders them as double-width tofu and prove nothing. The single-cell
+    /// property is the patched font's promise, not this table's.
+    #[test]
+    fn the_nerd_set_changes_markers_and_leaves_the_geometry_alone() {
+        for (nerd, unicode) in [
+            (NERD.prompt, UNICODE.prompt),
+            (NERD.tool, UNICODE.tool),
+            (NERD.error, UNICODE.error),
+            (NERD.ok, UNICODE.ok),
+        ] {
+            assert_ne!(nerd, unicode, "a marker the set exists to replace");
+            assert!(
+                nerd.chars().all(|c| ('\u{e000}'..='\u{f8ff}').contains(&c)),
+                "{nerd:?} must sit in the classic private-use plane; the \
+                 supplementary additions need a v3 font",
+            );
+        }
+
+        // Structure is shared, so the layout maths is identical in every set.
+        for (nerd, unicode) in [
+            (NERD.rule, UNICODE.rule),
+            (NERD.bar, UNICODE.bar),
+            (NERD.elbow, UNICODE.elbow),
+            (NERD.ellipsis, UNICODE.ellipsis),
+        ] {
+            assert_eq!(nerd, unicode, "structural glyphs must not diverge between sets");
+        }
+        assert_eq!(NERD.spinner, UNICODE.spinner);
     }
 
     #[test]
@@ -236,10 +311,21 @@ mod tests {
             for frame in set.spinner {
                 assert!(single_width(frame), "spinner frame {frame:?} must be one cell");
             }
-            for level in set.meter {
-                assert!(single_width(level), "meter level {level:?} must be one cell");
-            }
         }
+    }
+
+    /// The ellipsis is the deliberate exemption from `every_marker_is_one_cell`.
+    ///
+    /// It is left out of that list rather than forced to one cell, because the
+    /// only single-cell ASCII elision marker is a bare `.`, which reads as a
+    /// full stop and not as "there is more". The cost is that its width has to
+    /// be measured by whoever draws it; `render::truncate` is the one place
+    /// that does.
+    #[test]
+    fn the_ellipsis_is_the_one_marker_wider_than_a_cell() {
+        assert_eq!(UNICODE.ellipsis.chars().count(), 1);
+        assert_eq!(ASCII.ellipsis, "...");
+        assert!(ASCII.ellipsis.is_ascii());
     }
 
     #[test]
@@ -280,43 +366,6 @@ mod tests {
     fn the_claw_is_three_slashes() {
         assert_eq!(UNICODE.claw_mark().chars().count(), 3);
         assert_eq!(ASCII.claw_mark(), "///");
-    }
-
-    #[test]
-    fn bars_are_always_the_requested_width() {
-        // Misjudging this by one cell is what pushes a status line onto two rows.
-        for fraction in [0.0, 0.01, 0.25, 0.5, 0.99, 1.0] {
-            for width in [1, 5, 10, 40] {
-                assert_eq!(
-                    UNICODE.bar(fraction, width).chars().count(),
-                    width,
-                    "fraction {fraction} at width {width}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn bars_read_empty_and_full_at_the_extremes() {
-        assert_eq!(UNICODE.bar(0.0, 4).trim(), "");
-        assert_eq!(UNICODE.bar(1.0, 4), "████");
-    }
-
-    #[test]
-    fn out_of_range_fractions_are_clamped() {
-        assert_eq!(UNICODE.bar(-1.0, 4).chars().count(), 4);
-        assert_eq!(UNICODE.bar(99.0, 4), "████");
-    }
-
-    #[test]
-    fn partial_blocks_make_the_bar_move_smoothly() {
-        // Between two whole cells the leading cell should be a partial block
-        // rather than the bar jumping a full character.
-        let bar = UNICODE.bar(0.3, 4);
-        assert!(
-            bar.chars().any(|c| ('\u{2581}'..'\u{2588}').contains(&c)),
-            "expected a partial block in {bar:?}"
-        );
     }
 
     #[test]

@@ -49,16 +49,50 @@ The harness **must answer `ESC[6n`** (device status report) with something like 
 
 ## Architecture
 
-Thirteen crates, one responsibility each, strictly one-way dependencies:
+Fifteen crates, one responsibility each, strictly one-way dependencies:
 
 ```
 protocol ← provider ← context
          ← sandbox  ← tools ← mcp
          ← permission
                         ↖ core ← tui ← cli
+config, memory, skills, commands, session ─↗
 ```
 
-`octane-protocol` and `octane-permission`, `octane-sandbox`, `octane-memory`, `octane-skills`, `octane-commands` have **no internal dependencies at all**. Keep it that way; the layering is the design.
+`octane-cli` owns the composition: it discovers commands, skills, agents,
+memory and prior sessions and hands them to `core`, which is why those crates
+hang off the side rather than sitting in the chain.
+
+**A session is recorded as it happens, never rewritten.** `octane-session`
+appends one JSONL line per message under `~/.octane/sessions/`, so a session
+killed by a panic or a closed terminal is resumable up to its last complete
+line — and a truncated final line is expected rather than corruption, because
+the process was killed mid-write. Rewriting one document per turn would put the
+data exactly where the crash is. There is deliberately no index: listing walks
+the directory, which is fine for thousands of sessions and would need
+rethinking at a million.
+
+**Slash commands go through one registry.** `octane_commands::Registry` holds the
+client's built-ins alongside every discovered `.octane/commands/*.md`, and `/`
+completion reads from it rather than from a list in the CLI. Built-ins are
+registered *last* and win: command files come from whatever repository was
+cloned, so without that ordering, shipping a `commands/clear.md` would be enough
+to redefine what "start over" does. A file that tries is reported, not dropped.
+A command expands to a prompt and never to a code path (`RESEARCH.md` §F); its
+``!`shell` `` substitutions run through the same policy engine a model-issued
+command does, before the model sees anything.
+
+**MCP tools are not a second path into tool execution.** Servers are declared in
+`mcp.json`, spawned once per session, and their tools registered into the same
+`ToolRegistry` as the built-ins — so they inherit the sorted, cache-stable schema
+list and are resolved by the same policy engine as `mcp(server/tool)`. There is
+no weaker route: an MCP tool the policy denies is denied exactly as `bash` would
+be. `McpTool::is_mutating` returns true unconditionally, because a third-party
+schema cannot be trusted to describe its own effects, which is what keeps a
+`plan` agent from calling one. Server `instructions` are untrusted third-party
+text: fenced, attributed, and placed behind project memory in the preamble.
+
+`octane-protocol`, `octane-permission`, `octane-sandbox`, `octane-memory`, `octane-skills` and `octane-commands` have **no internal dependencies at all**. Keep it that way; the layering is the design — it is why the command registry takes the client's built-ins as data instead of knowing what a terminal or a session is.
 
 **`octane-core` coordinates and holds no domain logic.** Policy lives in `octane-permission`, containment in `octane-sandbox`, token accounting in `octane-context`, tool behaviour in `octane-tools`. Every collaborator is a trait, which is why `turn.rs` is testable against a scripted provider with no model, shell, or network. If you find yourself adding a decision to `core`, it probably belongs in the crate that owns that question.
 
@@ -70,18 +104,25 @@ protocol ← provider ← context
 
 These are load-bearing and their violation is silent:
 
-- **Tool schemas live in a `BTreeMap`.** They sit in the cached prompt prefix; hash-map iteration order reorders them between turns and voids every cache hit. Codex shipped this bug.
+- **Tool schemas live in a `BTreeMap`.** They sit in the cached prompt prefix, so iteration order is part of the cache key. Verified against Codex at the time of writing: its `McpConnectionSet.servers` is a `HashMap` and `list_all_tools` returns tools in its iteration order unsorted, so a multi-server setup gets a different tool order per process. Note the precise cost — Rust seeds `RandomState` once per process, so the order is stable *within* a run and differs *across* restarts. Codex's built-in tools are not affected; they are pushed onto a `Vec` in fixed code order.
 - **The prompt is append-only.** Configuration changed mid-session? Append a developer message. Editing what was already sent costs a full cache miss on every subsequent turn.
 - `.git/` and the agent's own config dir are read-only inside writable roots. Otherwise "write files in the project" transitively grants `.git/hooks/pre-commit`, which is arbitrary code on the next commit.
-- **Sandbox paths are `-D` parameters, never interpolated** into the Seatbelt profile.
-- **An unsupported platform is a sandbox *error*, not a pass.** Linux and Windows backends are unimplemented, so `bash` refuses rather than running unconfined.
+- **Sandbox paths are `-D` parameters, never interpolated** into the Seatbelt profile. Codex does the same, independently, and hardcodes `/usr/bin/sandbox-exec` for the same PATH-impersonation reason — the two backends agreeing is the strongest evidence either is right.
+- **On Linux, the bubblewrap carve-outs are bound *after* the writable root** that contains them, because the later mount wins. Reverse them and the sandbox reports success while granting `.git/hooks`.
+- **An unsupported platform is a sandbox *error*, not a pass.** macOS uses Seatbelt, Linux uses bubblewrap. Windows has no backend and refuses rather than running unconfined — except when it detects it is already inside WSL or a container, which is the `ExternalSandbox` case arriving by detection. The blocker is specific and worth knowing: a Windows restricted token lowers what the *process* is and cannot express `read_only_subpaths`, so such a backend would honour "write only in the workspace" while silently ignoring "except `.git/`" — passing its own tests while failing the one invariant that matters. Doing it properly needs per-path deny ACEs, which needs `unsafe`, which needs a crate that opts out of the workspace lint and a Windows CI job to be trustworthy.
 - **A denial ends the turn** rather than being reported to the model, which would invite it to route around the refusal.
 - **Permission precedence is `Deny > Ask > Allow`**, with one documented exception in `Policy::evaluate`: an interactive grant made this session outranks a configured `ask`, or "remember my answer" is impossible.
 - **`.gitignore` is honoured outside git repos** (`require_git(false)`), unlike `ignore`'s default.
 
 ### TUI
 
-Full screen on the alternate screen: header, transcript, composer, status. Everything except `app` is pure: state in, lines out.
+Full screen on the alternate screen, as a vertical stack of **panes**: header, transcript, approval, activity, composer, status.
+
+A pane implements `octane_tui::component::Pane` — `constraint(width)` says how much room it wants, `render(area, buf)` draws it — and lives in the module owning its state, so the composer's pane is in `composer.rs` and the status line's in `status.rs`. `app` collects the constraints, splits once, and renders each into what it got; it holds no idea what any pane looks like.
+
+**Measuring and drawing stay on the same type.** Split into a `foo_height` beside a `foo_widget`, they drift, and the drift is silent because each half is individually correct: a pane measured one row short simply loses its last line. That is why `Pane` has exactly those two methods and why panes render from `&self` — anything needing `&mut` (wrapping the transcript mutates its cache) is computed before the frame and passed in, which is what `TranscriptView` is for.
+
+Everything except `app` is pure: state in, cells out. A pane is testable by rendering it into a `ratatui::buffer::Buffer` and asserting on cells, with no terminal involved.
 
 Two rules or the region visibly flickers, and neither is catchable by a unit test because both render correctly: redraw only when `dirty`, and call `Terminal::resize` only when the size actually changed (it resets ratatui's buffers, discarding the cell diff).
 

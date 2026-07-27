@@ -37,10 +37,10 @@ pub use events::EventSink;
 pub use model_source::ModelStepSource;
 pub use loop_guard::LoopGuard;
 pub use prompt::{BASE_INSTRUCTIONS, PromptAssembler, mode_switch_notice};
-pub use step::{StepDecision, StopReason};
+pub use step::StopReason;
 pub use summarizer::ModelSummarizer;
 pub use task::{Delegate, TaskTool};
-pub use turn::{Approver, TurnRunner};
+pub use turn::{Approver, TurnRunner, Verdict};
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {

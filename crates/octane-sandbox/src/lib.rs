@@ -20,8 +20,17 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+// Compiled everywhere, dispatched to only on Linux. It builds an argument
+// vector and calls no Linux-specific API, so gating the module would mean its
+// ordering tests — the ones that stop a carve-out being silently overwritten —
+// never ran on a maintainer's machine or in a macOS CI job.
+pub mod bwrap;
 pub mod denial;
 pub mod policy;
+// Compiled everywhere for the same reason `bwrap` is: it is pure logic, and its
+// tests are the only thing standing between a stray `CONTAINER=` and running
+// unconfined.
+pub mod windows;
 #[cfg(target_os = "macos")]
 pub mod seatbelt;
 
@@ -72,10 +81,21 @@ pub fn wrap(
             {
                 seatbelt::wrap(command, policy, cwd).map(Some)
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            {
+                bwrap::wrap(command, policy, cwd).map(Some)
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
                 let _ = (command, cwd);
-                Err(SandboxError::UnsupportedPlatform)
+                // Already inside someone else's containment? Then this is the
+                // `ExternalSandbox` case arriving by detection rather than by
+                // configuration, and double-wrapping is neither possible nor
+                // wanted.
+                if windows::external_containment(|name| std::env::var(name).ok()).is_some() {
+                    return Ok(None);
+                }
+                Err(windows::unavailable())
             }
         }
     }

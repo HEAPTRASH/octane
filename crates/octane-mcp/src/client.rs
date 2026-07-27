@@ -102,6 +102,10 @@ impl McpClient {
             .and_then(|v| v.as_str())
             .ok_or_else(|| McpError::Malformed("initialize result lacks protocolVersion".into()))?;
         negotiate(server_version)?;
+        // The transport carries this on every later request. Told here because
+        // this is the only place that knows the answer, and a transport sending
+        // its own maximum instead is rejected by every older server.
+        self.transport.negotiated_version(server_version).await;
 
         let capabilities: ServerCapabilities = result
             .get("capabilities")

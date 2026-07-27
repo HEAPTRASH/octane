@@ -15,12 +15,12 @@ use crate::{SKILL_FILE, SkillError};
 /// Malformed skills are **skipped and reported**, not fatal. Skills are
 /// third-party content; one broken `SKILL.md` in a cloned repo must not prevent
 /// the session from starting.
-pub fn discover(dirs: &[(Utf8PathBuf, bool)]) -> (Vec<Skill>, Vec<SkillError>) {
+pub fn discover(dirs: &[Utf8PathBuf]) -> (Vec<Skill>, Vec<SkillError>) {
     let mut found: std::collections::BTreeMap<String, Skill> = std::collections::BTreeMap::new();
     let mut errors = Vec::new();
 
-    for (dir, is_project_local) in dirs {
-        match scan_dir(dir, *is_project_local) {
+    for dir in dirs {
+        match scan_dir(dir) {
             Ok(skills) => {
                 for skill in skills {
                     found.insert(skill.frontmatter.name.clone(), skill);
@@ -35,7 +35,7 @@ pub fn discover(dirs: &[(Utf8PathBuf, bool)]) -> (Vec<Skill>, Vec<SkillError>) {
     (found.into_values().collect(), errors)
 }
 
-fn scan_dir(dir: &Utf8Path, is_project_local: bool) -> Result<Vec<Skill>, SkillError> {
+fn scan_dir(dir: &Utf8Path) -> Result<Vec<Skill>, SkillError> {
     if !dir.is_dir() {
         return Ok(Vec::new());
     }
@@ -52,7 +52,7 @@ fn scan_dir(dir: &Utf8Path, is_project_local: bool) -> Result<Vec<Skill>, SkillE
         if !path.is_dir() {
             continue;
         }
-        match load_skill(&path, is_project_local) {
+        match load_skill(&path) {
             Ok(Some(skill)) => skills.push(skill),
             Ok(None) => {}
             // A malformed skill is dropped here; the caller collects the error.
@@ -63,7 +63,7 @@ fn scan_dir(dir: &Utf8Path, is_project_local: bool) -> Result<Vec<Skill>, SkillE
 }
 
 /// Load a single skill directory. `Ok(None)` means "not a skill".
-pub fn load_skill(dir: &Utf8Path, is_project_local: bool) -> Result<Option<Skill>, SkillError> {
+pub fn load_skill(dir: &Utf8Path) -> Result<Option<Skill>, SkillError> {
     let skill_file = dir.join(SKILL_FILE);
     if !skill_file.is_file() {
         return Ok(None);
@@ -77,7 +77,7 @@ pub fn load_skill(dir: &Utf8Path, is_project_local: bool) -> Result<Option<Skill
     let dir_name = dir.file_name().unwrap_or_default();
     frontmatter.validate(skill_file.as_str(), dir_name)?;
 
-    Ok(Some(Skill { frontmatter, root: dir.to_owned(), is_project_local }))
+    Ok(Some(Skill { frontmatter, root: dir.to_owned() }))
 }
 
 /// Render the tier-1 manifest for the system prompt.
@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn missing_directories_are_not_errors() {
-        let (skills, errors) = discover(&[("/nonexistent/skills".into(), false)]);
+        let (skills, errors) = discover(&["/nonexistent/skills".into()]);
         assert!(skills.is_empty());
         assert!(errors.is_empty());
     }
@@ -126,7 +126,6 @@ mod tests {
                 allowed_tools: None,
             },
             root: "/skills/pdf-processing".into(),
-            is_project_local: false,
         };
 
         let manifest = render_manifest(std::slice::from_ref(&skill));

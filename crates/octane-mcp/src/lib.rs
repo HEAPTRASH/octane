@@ -28,14 +28,16 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
 pub mod client;
+pub mod config;
 pub mod protocol;
 pub mod tool;
 pub mod transport;
 
 pub use client::{McpClient, ServerCapabilities};
+pub use config::{ServerConfig, discover};
 pub use protocol::{PROTOCOL_VERSION, Request, Response};
 pub use tool::McpTool;
-pub use transport::{StdioTransport, Transport};
+pub use transport::{HttpTransport, StdioTransport, Transport};
 
 #[derive(Debug, thiserror::Error)]
 pub enum McpError {
@@ -50,6 +52,9 @@ pub enum McpError {
 
     #[error("malformed message: {0}")]
     Malformed(String),
+
+    #[error("{server}: {reason}")]
+    Config { server: String, reason: String },
 
     #[error("capability {0:?} was not negotiated")]
     CapabilityUnavailable(&'static str),

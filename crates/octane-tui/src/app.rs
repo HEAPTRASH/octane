@@ -1,27 +1,30 @@
 //! The runtime loop.
 //!
-//! Everything else in this crate is pure. This module is where the terminal,
-//! async, and I/O live, deliberately concentrated in one place.
+//! The terminal, async, and I/O live here and nowhere else. Everything this
+//! module draws it draws by asking a [`Pane`](crate::component::Pane) — it owns
+//! the layout, not the appearance of anything in it.
 //!
 //! # Full screen
 //!
-//! The alternate screen, with a fixed layout: brand header at the top, transcript
-//! filling the middle, composer and status pinned to the bottom.
+//! The alternate screen, with a fixed vertical stack: header, transcript,
+//! approval, activity, composer, status. Each band's size comes from the pane
+//! that fills it, so adding or resizing one is a change in that pane's module.
 //!
 //! This trades away the terminal's own scrollback, search, and selection, so
-//! [`crate::transcript`] provides scrolling in their place. It is a real cost —
-//! `cmd+F` and mouse selection stop meaning what they did — and it is the reason
-//! the transcript pane keeps a generous line budget and a visible scrollbar.
+//! [`crate::transcript`] provides scrolling in their place.
 //!
 //! # Flicker
 //!
-//! Two rules, both of which are invisible until violated because their absence
-//! still renders correctly:
+//! Two rules, both invisible until violated because their absence still renders
+//! correctly:
 //!
 //! - Redraw only when something changed. The caller polls on a tick, so an
 //!   unconditional draw repaints ~12 times a second forever.
 //! - Wrap every frame in synchronized output (`CSI ?2026h` / `l`) so the terminal
 //!   presents it atomically instead of tearing.
+//!
+//! `scripts/tui-smoke.py` measures idle bytes on a pty and is the only thing that
+//! catches a regression in either.
 
 use std::io::{self, Stdout};
 use std::time::{Duration, Instant};
@@ -40,29 +43,40 @@ use octane_protocol::Event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Clear};
 
-use crate::approval::{ApprovalPrompt, ApprovalReply};
-use crate::completion::{Candidate, Completion};
-use crate::composer::{Composer, Submission};
+use crate::approval::{ApprovalPane, ApprovalPrompt, ApprovalReply};
+use crate::banner;
+use crate::completion::{self, Candidate, Completion};
+use crate::component::{self, Pane};
+use crate::composer::{Composer, ComposerPane, Submission};
+use crate::picker;
 use crate::glyphs::Glyphs;
 use crate::keymap::{self, KeyAction, KeyContext};
 use crate::render::{RenderOptions, render_event};
-use crate::status::StatusLine;
-use crate::transcript::Transcript;
+use crate::status::{ActivityPane, StatusLine, StatusPane};
+use crate::transcript::{Transcript, TranscriptView, MIN_ROWS};
 
-/// Composer rows before it stops growing and scrolls internally.
+/// Rows the fixed bands claim before the transcript gets what is left: three of
+/// header, three of composer at its smallest, one of status.
 ///
-/// Generous, because shift+enter exists so people can write real paragraphs.
-const MAX_COMPOSER_ROWS: u16 = 12;
+/// Only used to guess the transcript's height for wrapping, which happens before
+/// the layout runs. The layout itself asks each pane, so a wrong guess here
+/// costs a slightly-off wrap width, never a misplaced pane.
+const FIXED_ROWS: u16 = 7;
 
-/// Rows the transcript keeps for itself no matter how large the draft grows.
-///
-/// Without a floor, a long draft squeezes the transcript to nothing and the user
-/// loses sight of what they are replying to.
-const MIN_TRANSCRIPT_ROWS: u16 = 3;
+/// Stands in for a pane that is not showing, so the slot indices stay fixed.
+struct Empty;
+
+impl Pane for Empty {
+    fn constraint(&self, _width: u16) -> Constraint {
+        Constraint::Length(0)
+    }
+    fn render(&self, _area: Rect, _buf: &mut ratatui::buffer::Buffer) {}
+}
+
+const EMPTY: Empty = Empty;
 
 /// Spinner tick. ~12fps: alive without being visible in a CPU profile.
 const TICK: Duration = Duration::from_millis(80);
@@ -84,7 +98,6 @@ pub struct App {
     completion: Completion,
     status: StatusLine,
     options: RenderOptions,
-    glyphs: Glyphs,
 
     /// Candidate universes for completion, supplied by the caller.
     commands: Vec<Candidate>,
@@ -105,6 +118,13 @@ pub struct App {
     expanded: std::collections::HashSet<octane_protocol::ItemId>,
     /// The transcript's rectangle at the last draw, for mapping a click.
     body_area: ratatui::layout::Rect,
+    /// Terminal width at the last draw.
+    ///
+    /// Up and down move by *display* row, so they need to know where the text
+    /// wraps — which is a property of the width it was drawn at, not of the
+    /// text. Captured here rather than queried at keypress so motion and the
+    /// frame the user is looking at agree.
+    drawn_width: u16,
     spinner_frame: usize,
     started: Instant,
 
@@ -119,6 +139,14 @@ pub struct App {
     /// The item currently streaming: its id, accumulated text, and whether it is
     /// reasoning rather than prose.
     streaming: Option<(octane_protocol::ItemId, String, bool)>,
+    /// Whole markdown blocks of the streaming message, already rendered.
+    ///
+    /// Kept so a delta re-renders only the unfinished tail. Reset whenever
+    /// `streaming` is, which is the one thing that must stay true: a stale
+    /// prefix here would prepend the previous message to the current one.
+    stream_stable: Vec<Line<'static>>,
+    /// Byte offset in the streaming text that `stream_stable` covers.
+    stream_committed: usize,
     /// An open selection overlay.
     /// Open pickers, innermost last.
     ///
@@ -175,7 +203,6 @@ impl App {
             completion: Completion::default(),
             status,
             options: RenderOptions { glyphs, ..Default::default() },
-            glyphs,
             commands: Vec::new(),
             files: Vec::new(),
             pending_approval: None,
@@ -184,6 +211,7 @@ impl App {
             expandable: std::collections::HashMap::new(),
             expanded: std::collections::HashSet::new(),
             body_area: ratatui::layout::Rect::default(),
+            drawn_width: 80,
             spinner_frame: 0,
             started: Instant::now(),
             workspace,
@@ -192,6 +220,8 @@ impl App {
             conversing: false,
             dirty: true,
             streaming: None,
+            stream_stable: Vec::new(),
+            stream_committed: 0,
             pickers: Vec::new(),
         })
     }
@@ -199,6 +229,16 @@ impl App {
     pub fn status_mut(&mut self) -> &mut StatusLine {
         self.dirty = true;
         &mut self.status
+    }
+
+    /// The active render options, including the glyph set.
+    ///
+    /// Read-only, so a caller rendering its own line — the CLI builds the status
+    /// line's activity label — uses the same set as everything else. Without it
+    /// that caller had to assume Unicode, and the ASCII fallback stopped short
+    /// of the status line.
+    pub fn options(&self) -> &RenderOptions {
+        &self.options
     }
 
     pub fn options_mut(&mut self) -> &mut RenderOptions {
@@ -240,12 +280,20 @@ impl App {
         {
             if !matches!(item.kind, octane_protocol::ItemKind::Error { .. }) {
                 self.conversing = true;
+                // The status line's hints recede once the session is real, so
+                // it has to learn the same fact at the same moment.
+                self.status.conversing = true;
             }
         }
 
         match event {
             Event::Item(ItemEvent::Started { item, .. }) => {
                 self.streaming = Some((item.id.clone(), String::new(), is_reasoning(&item.kind)));
+                // Reset together with the text they describe. Carried over,
+                // the previous message's committed blocks would be prepended
+                // to this one.
+                self.stream_stable.clear();
+                self.stream_committed = 0;
                 self.refresh_pending();
             }
             Event::Item(ItemEvent::Delta { item_id, text, .. }) => {
@@ -283,9 +331,21 @@ impl App {
     }
 
     /// Re-render the streaming region from the accumulated text.
+    /// Rebuild the streaming region from the accumulated text.
+    ///
+    /// Split in two, following Codex's streaming controller: whole markdown
+    /// blocks are rendered once into `stream_stable` and never touched again,
+    /// and only the unfinished tail after them is re-rendered per delta. Before
+    /// this the whole message was rebuilt on every token — quadratic in its
+    /// length, and visibly so on a long answer.
+    ///
+    /// It also means the streaming text is *markdown* rather than raw source,
+    /// so a message no longer reflows and restyles the instant it completes.
     fn refresh_pending(&mut self) {
         let Some((_, text, reasoning)) = &self.streaming else {
             self.transcript.clear_pending();
+            self.stream_stable.clear();
+            self.stream_committed = 0;
             return;
         };
         if *reasoning && self.options.reasoning == crate::render::Reasoning::Hidden {
@@ -293,15 +353,29 @@ impl App {
             return;
         }
 
-        let style =
-            if *reasoning { self.options.theme.reasoning() } else { Style::default() };
-        let lines: Vec<Line<'static>> = text
-            .split('\n')
-            .map(|line| {
-                let text = if *reasoning { format!("  {line}") } else { line.to_string() };
-                Line::styled(text, style)
-            })
-            .collect();
+        // Reasoning is a thought, not a document: rendering it as markdown
+        // would style whatever punctuation the model happened to emit.
+        if *reasoning {
+            let style = self.options.theme.reasoning();
+            let lines = text
+                .split('\n')
+                .map(|line| Line::styled(format!("  {line}"), style))
+                .collect();
+            self.transcript.set_pending(lines);
+            self.dirty = true;
+            return;
+        }
+
+        let (theme, glyphs) = (&self.options.theme, &self.options.glyphs);
+        let boundary = crate::markdown::stable_prefix(text);
+        if boundary > self.stream_committed {
+            let settled = &text[self.stream_committed..boundary];
+            self.stream_stable.extend(crate::markdown::render_committed(settled, theme, glyphs));
+            self.stream_committed = boundary;
+        }
+
+        let mut lines = self.stream_stable.clone();
+        lines.extend(crate::markdown::render(&text[self.stream_committed..], theme, glyphs));
 
         self.transcript.set_pending(lines);
         self.dirty = true;
@@ -357,6 +431,46 @@ impl App {
         self.dirty = true;
     }
 
+    /// Write a line into the transcript that no model produced.
+    ///
+    /// Command output, a report, a refusal: they belong in the transcript, but
+    /// there is no turn or item to attach them to. Synthesising the completed
+    /// item is one line here and was twenty-odd copies of it at the call sites.
+    pub fn note(&mut self, kind: octane_protocol::ItemKind) -> Result<()> {
+        use octane_protocol::{Item, ItemEvent, ItemId, ItemStatus, TurnId};
+        self.push_event(&Event::Item(ItemEvent::Completed {
+            turn_id: TurnId::new(),
+            item: Item { id: ItemId::new(), kind, status: ItemStatus::Completed },
+        }))
+    }
+
+    /// A note carrying prose, as an agent message.
+    pub fn say(&mut self, text: impl Into<String>) -> Result<()> {
+        self.note(octane_protocol::ItemKind::AgentMessage { text: text.into() })
+    }
+
+    /// A note carrying a failure.
+    pub fn report_error(&mut self, message: impl Into<String>) -> Result<()> {
+        self.note(octane_protocol::ItemKind::Error { message: message.into() })
+    }
+
+    /// Columns of the composer that hold text, at the width last drawn.
+    fn composer_usable(&self) -> usize {
+        crate::composer::usable_width(self.drawn_width)
+    }
+
+    /// Drop a pending approval without answering it.
+    ///
+    /// For a caller that can no longer service the prompt it installed. Leaving
+    /// it installed is worse than declining: a prompt whose responder is gone
+    /// still owns every keystroke, so the next thing typed disappears into it.
+    pub fn dismiss_approval(&mut self) {
+        if self.pending_approval.take().is_some() {
+            self.status.activity = self.parked_activity.take();
+            self.dirty = true;
+        }
+    }
+
     /// Empty the transcript, returning to the quiet start screen.
     pub fn clear_transcript(&mut self) {
         self.transcript.clear();
@@ -365,7 +479,6 @@ impl App {
         self.dirty = true;
     }
 
-    /// Open a selection overlay.
     /// Close every open picker.
     ///
     /// For a choice that ends the flow. A choice that opens a further level
@@ -377,12 +490,18 @@ impl App {
         }
     }
 
+    /// Open a selection overlay on top of any already showing.
     pub fn set_picker(&mut self, picker: crate::picker::Picker) {
         self.pickers.push(picker);
         self.dirty = true;
     }
 
     /// Redraw, if anything changed.
+    ///
+    /// The whole frame is: build a pane per band, ask each how tall it wants to
+    /// be, split once, draw each into what it got. Nothing here knows what a
+    /// composer or a status line looks like — that lives with the state it
+    /// draws, which is the point of [`Pane`].
     pub fn draw(&mut self) -> Result<()> {
         if !self.dirty {
             return Ok(());
@@ -391,161 +510,118 @@ impl App {
 
         let _ = crossterm::execute!(io::stdout(), BeginSynchronizedUpdate);
 
-        let width = self.terminal.size().map(|size| size.width).unwrap_or(80);
-        let composer_rows = composer_height(&self.composer, width);
-        let approval_rows = self
+        let size = self.terminal.size().unwrap_or(ratatui::layout::Size { width: 80, height: 24 });
+        self.drawn_width = size.width;
+
+        // The transcript is wrapped before the frame rather than inside it,
+        // because wrapping mutates its cache and a pane draws from `&self`.
+        // Keyed on whether a conversation has started, not on whether the
+        // transcript has lines: startup notices are lines, and an unconfigured
+        // provider prints two errors, which replaced the guidance for exactly
+        // the user who had never seen it.
+        let body_height = size.height.saturating_sub(FIXED_ROWS).max(MIN_ROWS);
+        let mut lines =
+            self.transcript.visible(size.width as usize, body_height as usize);
+        if !self.conversing {
+            if !lines.is_empty() {
+                lines.push(Line::default());
+            }
+            lines.extend(banner::empty_state_lines(
+                &self.options.theme,
+                &self.options.glyphs,
+                size.width,
+                body_height,
+            ));
+        }
+
+        // Borrowed field by field, not cloned. These used to be eight `.clone()`
+        // calls a frame purely so the draw closure could see them past the
+        // `&mut self.terminal`; disjoint field borrows say the same thing for
+        // nothing.
+        let options = &self.options;
+        let header =
+            banner::Header { workspace: &self.workspace, sandboxed: self.sandboxed, options };
+        let transcript = TranscriptView { lines, style: options.theme.canvas() };
+        // Rendered once, before the frame. Both halves of the pane need these
+        // rows and highlighting a diff is expensive, so computing them inside
+        // the pane paid for it twice a frame.
+        let approval_diff = self
             .pending_approval
             .as_ref()
-            .map(|(prompt, _)| approval_height(prompt, self.approval_expanded))
-            .unwrap_or(0);
-        let activity_rows = u16::from(self.status.activity.is_some());
+            .map(|(prompt, _)| {
+                ApprovalPane::diff_rows(prompt, self.approval_expanded, &self.options)
+            })
+            .unwrap_or_default();
+        let approval = self
+            .pending_approval
+            .as_ref()
+            .map(|(prompt, _)| ApprovalPane { prompt, diff: &approval_diff, options });
+        let activity =
+            ActivityPane { status: &self.status, spinner_frame: self.spinner_frame, options };
+        let composer = ComposerPane { composer: &self.composer, options };
+        let status = StatusPane { status: &self.status, options };
 
-        let status = self.status.clone();
-        let spinner_frame = self.spinner_frame;
-        let theme = self.options.theme;
-        let glyphs = self.glyphs;
-        let pending = self.pending_approval.as_ref().map(|(prompt, _)| prompt.clone());
-        let approval_expanded = self.approval_expanded;
-        let picker_state = self.pickers.clone();
-        let workspace = self.workspace.clone();
-        let sandboxed = self.sandboxed;
+        // Order is top to bottom. An absent approval still occupies a slot so
+        // the indices below stay put; its constraint is then zero rows.
+        let panes: [&dyn Pane; 6] = [
+            &header,
+            &transcript,
+            approval.as_ref().map_or(&EMPTY as &dyn Pane, |a| a),
+            &activity,
+            &composer,
+            &status,
+        ];
+        let constraints: Vec<Constraint> =
+            panes.iter().map(|pane| pane.constraint(size.width)).collect();
 
-        // Carried out through a local: `self` is mutably borrowed by
-        // `transcript` below, so the closure cannot write a field on it. This
-        // is the rect a click is tested against, and leaving it at its default
-        // makes every click miss.
-        let mut drawn_body = ratatui::layout::Rect::default();
-
-        let transcript = &mut self.transcript;
-        let composer = &self.composer;
+        let mut drawn_body = Rect::default();
+        let pickers = &self.pickers;
         let completion = &self.completion;
+        let terminal = &mut self.terminal;
 
-        self.terminal.draw(|frame| {
-            let area = frame.area();
-
+        terminal.draw(|frame| {
+            let screen = frame.area();
+            // Terminal themes vary wildly. Painting the canvas makes the
+            // website's ink/paper contrast part of Octane rather than an
+            // accident of the user's profile.
+            frame.render_widget(Block::default().style(options.theme.canvas()), screen);
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Length(2),                  // header
-                    Constraint::Min(MIN_TRANSCRIPT_ROWS),   // transcript
-                    Constraint::Length(approval_rows),
-                    Constraint::Length(activity_rows),
-                    Constraint::Length(composer_rows + 2),  // composer + border
-                    Constraint::Length(1),                  // status
-                ])
-                .split(area);
+                .constraints(constraints)
+                .split(screen);
 
-            frame.render_widget(header(&workspace, sandboxed, &theme, &glyphs), chunks[0]);
-
-            // Transcript, or the empty state.
-            let body = chunks[1];
-            drawn_body = body;
-            // Cleared first: `Paragraph` writes only the cells it covers, so a
-            // line shorter than the one it replaces leaves the old tail behind.
-            // That is the stray-character bleed at the end of scrolled lines.
-            frame.render_widget(Clear, body);
-            // Keyed on whether a conversation has started, not on whether the
-            // transcript has lines. Startup notices are lines: an unconfigured
-            // provider prints two errors, which replaced the guidance for the
-            // one user who has never seen it before.
-            if !self.conversing {
-                let mut lines = transcript.visible(body.width as usize, body.height as usize);
-                if !lines.is_empty() {
-                    lines.push(ratatui::text::Line::default());
-                }
-                let hints = empty_state_lines(&theme, &glyphs, body.width, body.height);
-                lines.extend(hints);
-                frame.render_widget(Paragraph::new(lines), body);
-            } else {
-                let visible = transcript.visible(body.width as usize, body.height as usize);
-                frame.render_widget(Paragraph::new(visible), body);
+            for (pane, area) in panes.iter().zip(chunks.iter()) {
+                pane.render(*area, frame.buffer_mut());
             }
 
-            if let Some(prompt) = &pending {
-                let mut lines = vec![Line::from(vec![
-                    Span::styled(format!("{} ", glyphs.question), theme.label(theme.warning)),
-                    Span::raw(prompt.title()),
-                ])];
-                if let Some(diff) = &prompt.diff {
-                    let rendered = crate::render::render_diff(diff, &theme);
-                    let total = rendered.len();
-                    let shown = if approval_expanded {
-                        total
-                    } else {
-                        total.min(usize::from(APPROVAL_DIFF_ROWS))
-                    };
-                    lines.extend(rendered.into_iter().take(shown));
-                    if total > shown {
-                        lines.push(Line::styled(
-                            format!("  [+ {} more lines - f]", total - shown),
-                            theme.dim(),
-                        ));
-                    }
-                }
-                lines.push(Line::styled(prompt.options_line(), theme.dim()));
-                frame.render_widget(Paragraph::new(lines), chunks[2]);
-            }
+            // Kept for click mapping; leaving it at its default makes every
+            // click miss.
+            drawn_body = chunks[1];
 
-            if let Some(line) = status.activity_line(spinner_frame) {
-                frame.render_widget(
-                    Paragraph::new(Line::styled(line, theme.dim())),
-                    chunks[3],
-                );
-            }
+            // Set on the frame, not on the terminal afterwards: ratatui hides
+            // the cursor for any frame that does not ask for it, so a call made
+            // after `draw` returns is undone by the `draw` that follows.
+            let (x, y) = composer.caret(chunks[4]);
+            frame.set_cursor_position((x, y));
 
-            let composer_area = chunks[4];
-            let composer_lines: Vec<Line> = composer
-                .lines()
-                .iter()
-                .map(|line| Line::raw(line.to_string()))
-                .collect();
-            frame.render_widget(Clear, composer_area);
-            frame.render_widget(
-                Paragraph::new(composer_lines)
-                    // Wrapped, or a long line is simply cut off at the border.
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.accent))
-                        .title(Span::styled(
-                            format!(" {} ", glyphs.prompt),
-                            theme.label(theme.accent),
-                        )),
-                ),
-                composer_area,
-            );
-
-            // The caret follows the wrap too, or it sits at the end of a row the
-            // text has already flowed past.
-            let usable = usize::from(composer_area.width.saturating_sub(3)).max(1);
-            let (line, column) = composer.cursor_position();
-            let wrapped_before: usize = composer
-                .lines()
-                .iter()
-                .take(line)
-                .map(|text| text.chars().count().div_ceil(usable).max(1))
-                .sum();
-            let row = wrapped_before + column / usable;
-            frame.set_cursor_position((
-                composer_area.x + 1 + (column % usable) as u16,
-                composer_area.y + 1 + u16::try_from(row).unwrap_or(0),
-            ));
-
-            frame.render_widget(status_paragraph(&status, &theme, &glyphs), chunks[5]);
-
-            if let Some(picker) = picker_state.last() {
-                let area = centred(frame.area(), 66, picker_height(picker));
+            // Overlays float above the stack, so they are drawn last and are
+            // not part of the layout.
+            if !pickers.is_empty() {
+                let (widget, height) = picker::widget(pickers, &options.theme, &options.glyphs);
+                let area = component::centred(screen, 66, height);
                 frame.render_widget(Clear, area);
-                frame.render_widget(picker_widget(&picker_state, &theme, &glyphs), area);
+                frame.render_widget(widget, area);
             }
 
-            // The popup floats above the composer, so it never displaces the
-            // input the user is typing into.
+            // The completion popup sits directly above the composer, so it never
+            // displaces the input the user is typing into.
             if completion.is_active() {
-                let popup = popup_area(composer_area, completion, area);
+                let popup = completion::popup_area(chunks[4], completion, screen);
                 frame.render_widget(Clear, popup);
-                frame.render_widget(completion_widget(completion, &theme, &glyphs), popup);
+                frame.render_widget(
+                    completion::widget(completion, popup.width, &options.theme, &options.glyphs),
+                    popup,
+                );
             }
         })?;
 
@@ -643,7 +719,13 @@ impl App {
                 approval: self.pending_approval.as_ref().map(|(prompt, _)| prompt),
                 // A fully typed command must not swallow Enter.
                 completing: self.completion.is_active() && !self.completion.is_exhausted(),
-                on_first_line: self.composer.cursor_position().0 == 0,
+                // By display row, so a wrapped draft is navigable inside
+                // itself before either arrow reaches for history.
+                on_first_line: self.composer.row_position(self.composer_usable()).0 == 0,
+                on_last_line: {
+                    let (at, total) = self.composer.row_position(self.composer_usable());
+                    at + 1 >= total
+                },
                 ends_with_continuation: self.composer.ends_with_continuation(),
                 picking: !self.pickers.is_empty(),
             };
@@ -686,7 +768,11 @@ impl App {
                 None
             }
             KeyAction::MoveUp => {
-                self.composer.move_up();
+                self.composer.move_up(self.composer_usable());
+                None
+            }
+            KeyAction::MoveDown => {
+                self.composer.move_down(self.composer_usable());
                 None
             }
             KeyAction::HistoryPrevious => {
@@ -697,8 +783,40 @@ impl App {
                 self.composer.history_next();
                 None
             }
-            KeyAction::Clear => {
-                self.composer.clear();
+            KeyAction::MoveWordLeft => {
+                self.composer.move_word_left();
+                None
+            }
+            KeyAction::MoveWordRight => {
+                self.composer.move_word_right();
+                None
+            }
+            KeyAction::DeleteWordBackward => {
+                self.composer.delete_word_backward();
+                None
+            }
+            KeyAction::DeleteWordForward => {
+                self.composer.delete_word_forward();
+                None
+            }
+            KeyAction::KillToLineStart => {
+                self.composer.kill_to_line_start();
+                None
+            }
+            KeyAction::KillToLineEnd => {
+                self.composer.kill_to_line_end();
+                None
+            }
+            KeyAction::Yank => {
+                self.composer.yank();
+                None
+            }
+            KeyAction::Undo => {
+                self.composer.undo();
+                None
+            }
+            KeyAction::Redo => {
+                self.composer.redo();
                 None
             }
 
@@ -904,204 +1022,6 @@ impl Drop for App {
     }
 }
 
-/// Brand header: wordmark, workspace, sandbox state.
-fn header<'a>(
-    workspace: &str,
-    sandboxed: bool,
-    theme: &crate::theme::Theme,
-    glyphs: &Glyphs,
-) -> Paragraph<'a> {
-    let mark = if *glyphs == crate::glyphs::UNICODE { "\u{2588}\u{2584}\u{2588}" } else { "[#]" };
-
-    let mut spans = vec![
-        Span::styled(format!(" {mark} OCTANE"), theme.label(theme.accent)),
-        Span::styled(format!("  {}  ", glyphs.separator), theme.dim()),
-        Span::styled(workspace.to_string(), theme.dim()),
-    ];
-    if !sandboxed {
-        // Running unconfined is not something to learn by surprise.
-        spans.push(Span::styled("  sandbox OFF", theme.label(theme.error)));
-    }
-
-    Paragraph::new(vec![Line::from(spans), Line::default()])
-}
-
-/// Shown when there are no messages yet.
-///
-/// The negative space is deliberate: an empty session should look calm and
-/// finished, not like a screen waiting for content that failed to load.
-/// The wordmark and key hints, as lines.
-///
-/// Separate from the widget so they can be appended below startup notices
-/// rather than replaced by them.
-fn empty_state_lines<'a>(
-    theme: &crate::theme::Theme,
-    glyphs: &Glyphs,
-    width: u16,
-    height: u16,
-) -> Vec<Line<'a>> {
-    let hints: &[(&str, &str)] = &[
-        ("type a message", "ask octane to do something"),
-        ("!command", "run a shell command"),
-        ("@path", "attach a file"),
-        ("/", "commands"),
-        ("shift/alt+enter", "newline"),
-        ("shift+tab", "cycle mode"),
-    ];
-
-    let mut lines = vec![Line::default()];
-
-    // The wordmark lives here rather than in a pre-session print: under the
-    // alternate screen the empty transcript is the only place with room for it,
-    // and it disappears on its own once the session has content.
-    // Centred, because the logo is a picture rather than a line of text and a
-    // left-flush picture reads as misaligned.
-    let art = crate::banner::wordmark(width, height, glyphs.rule == crate::glyphs::ASCII.rule);
-    let art_width = art.iter().map(|row| row.chars().count()).max().unwrap_or(0);
-    let indent = " ".repeat(usize::from(width).saturating_sub(art_width) / 2);
-    for row in art {
-        lines.push(Line::styled(
-            format!("{indent}{row}"),
-            Style::default().fg(theme.accent),
-        ));
-    }
-
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled(format!("  {}", glyphs.claw_mark()), theme.label(theme.accent)),
-        Span::styled(" an agent that codes in your terminal", theme.dim()),
-    ]));
-    lines.push(Line::default());
-
-    for (key, description) in hints {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {key:<16}"), Style::default().fg(theme.accent)),
-            Span::styled(description.to_string(), theme.dim()),
-        ]));
-    }
-
-    if width >= 40 {
-        lines.push(Line::default());
-        lines.push(Line::styled(
-            format!("  {}", glyphs.rule((width as usize).min(58).saturating_sub(2))),
-            theme.dim(),
-        ));
-    }
-
-    lines
-}
-
-fn completion_widget<'a>(
-    completion: &Completion,
-    theme: &crate::theme::Theme,
-    glyphs: &Glyphs,
-) -> Paragraph<'a> {
-    let (visible, highlight) = completion.visible();
-
-    let lines: Vec<Line> = visible
-        .iter()
-        .enumerate()
-        .map(|(index, candidate)| {
-            let selected = index == highlight;
-            // From the set, or the ASCII fallback stops at the transcript.
-            let marker =
-                if selected { format!("{} ", glyphs.edit) } else { "  ".to_string() };
-            let style = if selected {
-                Style::default().fg(theme.accent)
-            } else {
-                Style::default().fg(theme.assistant)
-            };
-            Line::from(vec![
-                Span::styled(marker, Style::default().fg(theme.accent)),
-                Span::styled(candidate.value.clone(), style),
-                Span::styled(format!("  {}", candidate.detail), theme.dim()),
-            ])
-        })
-        .collect();
-
-    Paragraph::new(lines).block(
-        Block::default().borders(Borders::ALL).border_style(theme.dim()),
-    )
-}
-
-/// Place the popup directly above the composer, clamped to the screen.
-fn popup_area(composer: Rect, completion: &Completion, screen: Rect) -> Rect {
-    let rows = (completion.visible().0.len() as u16).min(crate::completion::MAX_VISIBLE as u16) + 2;
-    let height = rows.min(screen.height.saturating_sub(composer.height).max(3));
-    let width = composer.width;
-
-    Rect {
-        x: composer.x,
-        y: composer.y.saturating_sub(height),
-        width,
-        height,
-    }
-}
-
-fn status_paragraph<'a>(
-    status: &StatusLine,
-    theme: &crate::theme::Theme,
-    glyphs: &Glyphs,
-) -> Paragraph<'a> {
-    let mut spans = vec![Span::raw(" ")];
-    for (index, segment) in status.segments().into_iter().enumerate() {
-        if index > 0 {
-            spans.push(Span::styled(format!(" {} ", glyphs.separator), theme.dim()));
-        }
-        // An alert is marked and bold, not only coloured. `bypass` is the one
-        // mode whose entire point is that the user must not forget they are in
-        // it, and under NO_COLOR a bare foreground colour makes it identical to
-        // `default`. `theme.label` already falls back to BOLD.
-        let style = match segment.emphasis {
-            crate::status::Emphasis::Alert => theme.label(segment.color(theme)),
-            _ => Style::default().fg(segment.color(theme)),
-        };
-        if segment.emphasis == crate::status::Emphasis::Alert {
-            spans.push(Span::styled(format!("{} ", glyphs.error), style));
-        }
-        spans.push(Span::styled(segment.text.clone(), style));
-    }
-    spans.push(Span::styled("   ", theme.dim()));
-    spans.push(Span::styled(status.hints(), theme.dim()));
-    Paragraph::new(Line::from(spans))
-}
-
-/// Rows the composer needs at a given width.
-///
-/// Counts *wrapped* rows, not newlines. A single long line still occupies
-/// several rows on screen, and sizing by newline count alone leaves the box one
-/// row tall while the text runs off the end of it — which is what happens the
-/// first time anyone pastes a paragraph.
-fn composer_height(composer: &Composer, width: u16) -> u16 {
-    // Two columns of border plus one of padding.
-    let usable = usize::from(width.saturating_sub(3)).max(1);
-
-    let rows: usize = composer
-        .lines()
-        .iter()
-        .map(|line| line.chars().count().div_ceil(usable).max(1))
-        .sum();
-
-    u16::try_from(rows).unwrap_or(MAX_COMPOSER_ROWS).clamp(1, MAX_COMPOSER_ROWS)
-}
-
-/// Diff rows shown before `f` is pressed.
-const APPROVAL_DIFF_ROWS: u16 = 12;
-
-fn approval_height(prompt: &ApprovalPrompt, expanded: bool) -> u16 {
-    let diff_rows = prompt
-        .diff
-        .as_ref()
-        // Capped, or a 500-line diff swallows the screen. `f` lifts the cap,
-        // which is what it always claimed to do.
-        .map(|diff| {
-            let total = u16::try_from(diff.lines().count()).unwrap_or(u16::MAX);
-            if expanded { total } else { total.min(APPROVAL_DIFF_ROWS) }
-        })
-        .unwrap_or(0);
-    2 + diff_rows
-}
-
 /// The item id of a tool result that could be shown in full.
 ///
 /// Only tool results clip anything, so only they can expand.
@@ -1116,323 +1036,3 @@ fn expandable_id(event: &Event) -> Option<octane_protocol::ItemId> {
 fn is_reasoning(kind: &octane_protocol::ItemKind) -> bool {
     matches!(kind, octane_protocol::ItemKind::Reasoning { .. })
 }
-
-/// Rows a picker needs: border, title, filter, and its visible rows.
-fn picker_height(picker: &crate::picker::Picker) -> u16 {
-    // rows + two borders + the filter line + a blank + a blank + the hints.
-    // An empty result is two body lines, not one: the echoed query and the way
-    // out. Undercounting here silently clips the hint line, which is the line
-    // that says what Esc will do.
-    // Counted, not estimated. Undercounting clips the hint line, which is the
-    // line that says what Esc will do; overcounting leaves a dead row inside
-    // the border. Mirrors `picker_widget` exactly, so the two move together.
-    let (visible, highlight) = picker.visible();
-    let mut lines = 2 // filter line, blank
-        + if picker.is_empty() { 2 } else { visible.len() }
-        + 2; // blank, hints
-
-    if visible.get(highlight).is_some_and(|item| !item.detail.is_empty()) {
-        lines += 1;
-    }
-    if picker.matches().len() > visible.len() {
-        lines += 1;
-    }
-
-    u16::try_from(lines).unwrap_or(14) + 2 // borders
-}
-
-/// A box of the given width and height, centred in `area`.
-fn centred(area: Rect, width: u16, height: u16) -> Rect {
-    // Clamped, so a small terminal gets a smaller box rather than a box that
-    // starts off-screen.
-    let width = width.min(area.width.saturating_sub(2)).max(20);
-    let height = height.min(area.height.saturating_sub(2)).max(5);
-    Rect {
-        x: area.x + (area.width.saturating_sub(width)) / 2,
-        y: area.y + (area.height.saturating_sub(height)) / 2,
-        width,
-        height,
-    }
-}
-
-fn picker_widget<'a>(
-    stack: &[crate::picker::Picker],
-    theme: &crate::theme::Theme,
-    glyphs: &Glyphs,
-) -> Paragraph<'a> {
-    let Some(picker) = stack.last() else { return Paragraph::new(Vec::<Line>::new()) };
-    let (visible, highlight) = picker.visible();
-    let total = picker.matches().len();
-
-    // Padded past the longest label rather than to a guessed width, or a long
-    // one runs straight into its state with no gap — `Ollama (local)ready`.
-    let column = visible
-        .iter()
-        .map(|item| item.label.chars().count())
-        .max()
-        .unwrap_or(0)
-        + 2;
-
-    // The ratio is what makes a short list self-explaining: without a
-    // denominator, "one result" and "one result out of two hundred" look the
-    // same, and a filter that excluded everything looks like an empty menu.
-    let ratio = format!("{total}/{}", picker.len());
-    let head = if picker.filter().is_empty() {
-        "type to filter".to_string()
-    } else {
-        format!("{} {}", glyphs.prompt, picker.filter())
-    };
-    let mut lines = vec![Line::from(vec![
-        Span::styled(head, theme.dim()),
-        Span::styled(format!("   {ratio}"), theme.dim()),
-    ])];
-    lines.push(Line::default());
-
-    if visible.is_empty() {
-        // Echoes the query, because the usual cause is a typo the user cannot
-        // see from the result, and names the way out.
-        lines.push(Line::styled(
-            format!("  nothing matches {:?}", picker.filter()),
-            theme.dim(),
-        ));
-        lines.push(Line::styled(
-            "  backspace to narrow less, esc to clear the filter",
-            theme.dim(),
-        ));
-    }
-
-    for (index, item) in visible.iter().enumerate() {
-        let selected = index == highlight;
-        let marker = if selected { glyphs.edit } else { " " };
-
-        let label_style = if !item.enabled {
-            theme.dim()
-        } else if selected {
-            Style::default().fg(theme.accent).add_modifier(ratatui::style::Modifier::BOLD)
-        } else {
-            Style::default().fg(theme.assistant)
-        };
-
-        // Underlined, not bold: the selected row is already bold, so a bold
-        // span inside it is invisible on exactly the row being looked at.
-        let label = {
-            let padded = format!("{:<column$}", item.label);
-            match picker.match_span(item) {
-                Some((start, len)) => {
-                    let chars: Vec<char> = padded.chars().collect();
-                    let cut = |a: usize, b: usize| chars[a.min(chars.len())..b.min(chars.len())]
-                        .iter()
-                        .collect::<String>();
-                    vec![
-                        Span::styled(cut(0, start), label_style),
-                        Span::styled(
-                            cut(start, start + len),
-                            label_style.add_modifier(ratatui::style::Modifier::UNDERLINED),
-                        ),
-                        Span::styled(cut(start + len, chars.len()), label_style),
-                    ]
-                }
-                None => vec![Span::styled(padded, label_style)],
-            }
-        };
-
-        let mut spans = vec![Span::styled(format!("{marker} "), Style::default().fg(theme.accent))];
-        if let Some(chosen) = item.selected_value {
-            let glyph = if chosen { glyphs.radio_on } else { glyphs.radio_off };
-            spans.push(Span::styled(
-                format!("{glyph} "),
-                if chosen { Style::default().fg(theme.accent) } else { theme.dim() },
-            ));
-        }
-        spans.extend(label);
-        if let Some(state) = &item.state {
-            // The state is why a row is or is not usable, so it earns colour.
-            let style = if item.enabled { theme.dim() } else { theme.label(theme.warning) };
-            spans.push(Span::styled(state.clone(), style));
-        }
-        lines.push(Line::from(spans));
-
-        // Under the highlight only. Every row would triple the box height and
-        // bury the list the detail is meant to explain.
-        if selected && !item.detail.is_empty() {
-            lines.push(Line::styled(format!("      {}", item.detail), theme.dim()));
-        }
-    }
-
-    // `visible()` windows to MAX_VISIBLE and says nothing about the remainder,
-    // so a long list looked complete. The ratio above counts matches, not rows
-    // on screen.
-    let hidden = total.saturating_sub(visible.len());
-    if hidden > 0 {
-        lines.push(Line::styled(format!("  [+ {hidden} more]"), theme.dim()));
-    }
-
-    lines.push(Line::default());
-    // Names what Esc will actually do, which now depends on both the filter
-    // and the depth. A fixed "esc cancel" was a lie at every level but one.
-    let escape = if !picker.filter().is_empty() {
-        "esc clear filter".to_string()
-    } else if stack.len() > 1 {
-        match stack.get(stack.len() - 2) {
-            Some(parent) => format!("esc back to {}", parent.title),
-            None => "esc back".to_string(),
-        }
-    } else {
-        "esc close".to_string()
-    };
-    lines.push(Line::styled(
-        format!(
-            "  {}{} move   enter choose   {escape}",
-            glyphs.arrow_up, glyphs.arrow_down
-        ),
-        theme.dim(),
-    ));
-
-    // The trail is built from the stack itself, so it cannot drift from where
-    // the user actually is. Ancestors are dimmed and only the active level is
-    // emphasised, which keeps the distinction under NO_COLOR: `theme.label`
-    // falls back to BOLD when there is no colour to use.
-    let mut title = vec![Span::raw(" ")];
-    for (index, level) in stack.iter().enumerate() {
-        if index > 0 {
-            title.push(Span::styled(format!(" {} ", glyphs.prompt), theme.dim()));
-        }
-        let last = index + 1 == stack.len();
-        title.push(Span::styled(
-            level.title.clone(),
-            if last { theme.label(theme.accent) } else { theme.dim() },
-        ));
-    }
-    title.push(Span::raw(" "));
-
-    Paragraph::new(lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.accent))
-            .title(Line::from(title)),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use octane_permission::Resource;
-
-    fn prompt(diff: Option<&str>) -> ApprovalPrompt {
-        ApprovalPrompt {
-            resource: Resource::write_file("/p/a.rs"),
-            summary: "Write a.rs".into(),
-            diff: diff.map(ToString::to_string),
-        }
-    }
-
-    #[test]
-    fn the_composer_grows_with_the_draft() {
-        let mut composer = Composer::new();
-        assert_eq!(composer_height(&composer, 80), 1);
-
-        // This is what shift+enter does, and the box must follow it.
-        for expected in 2..=6 {
-            composer.newline();
-            assert_eq!(composer_height(&composer, 80), expected);
-        }
-    }
-
-    #[test]
-    fn a_long_line_grows_the_box_by_wrapping() {
-        // The bug this fixes: sizing by newline count leaves the box one row
-        // tall while a pasted paragraph runs off the end of it.
-        let mut composer = Composer::new();
-        composer.insert_str(&"x".repeat(200));
-        assert!(
-            composer_height(&composer, 40) > 1,
-            "a wrapped line must grow the box"
-        );
-    }
-
-    #[test]
-    fn wrapping_is_measured_against_the_usable_width() {
-        let mut composer = Composer::new();
-        composer.insert_str(&"x".repeat(77));
-        // 80 wide minus two borders and a column of padding.
-        assert_eq!(composer_height(&composer, 80), 1);
-
-        composer.insert_str("xx");
-        assert_eq!(composer_height(&composer, 80), 2);
-    }
-
-    #[test]
-    fn a_narrow_terminal_does_not_divide_by_zero() {
-        let mut composer = Composer::new();
-        composer.insert_str("some text");
-        for width in 0..=4 {
-            assert!(composer_height(&composer, width) >= 1);
-        }
-    }
-
-    #[test]
-    fn a_runaway_draft_is_capped() {
-        let mut composer = Composer::new();
-        for _ in 0..100 {
-            composer.newline();
-        }
-        assert_eq!(
-            composer_height(&composer, 80),
-            MAX_COMPOSER_ROWS,
-            "the transcript must keep some rows"
-        );
-    }
-
-    #[test]
-    fn pressing_f_lifts_the_diff_cap() {
-        // The key was advertised from the first version of this prompt and did
-        // nothing: `answer` returned early on anything that was not a
-        // decision, so the reply was swallowed before it reached here.
-        let huge: String = (0..40).map(|i| format!("+ line {i}\n")).collect();
-        let prompt = prompt(Some(&huge));
-
-        assert_eq!(approval_height(&prompt, false), 2 + APPROVAL_DIFF_ROWS);
-        assert_eq!(approval_height(&prompt, true), 2 + 40);
-    }
-
-    #[test]
-    fn approval_height_accounts_for_the_diff_and_caps_it() {
-        assert_eq!(approval_height(&prompt(None), false), 2);
-        assert_eq!(approval_height(&prompt(Some("+ one\n+ two\n")), false), 4);
-
-        let huge: String = (0..500).map(|i| format!("+ line {i}\n")).collect();
-        assert_eq!(approval_height(&prompt(Some(&huge)), false), 14);
-    }
-
-    #[test]
-    fn the_popup_sits_above_the_composer() {
-        let screen = Rect::new(0, 0, 80, 30);
-        let composer = Rect::new(0, 24, 80, 4);
-
-        let mut completion = Completion::default();
-        let files: Vec<String> = (0..20).map(|i| format!("src/f{i}.rs")).collect();
-        completion.update("@f", 2, &[], &files);
-
-        let popup = popup_area(composer, &completion, screen);
-
-        assert!(popup.y + popup.height <= composer.y, "popup must not cover the input");
-        assert_eq!(popup.x, composer.x);
-        assert_eq!(popup.width, composer.width);
-    }
-
-    #[test]
-    fn the_popup_never_runs_off_the_top() {
-        // A short terminal with a tall draft is the case that overflows.
-        let screen = Rect::new(0, 0, 80, 10);
-        let composer = Rect::new(0, 2, 80, 6);
-
-        let mut completion = Completion::default();
-        let files: Vec<String> = (0..50).map(|i| format!("src/f{i}.rs")).collect();
-        completion.update("@f", 2, &[], &files);
-
-        let popup = popup_area(composer, &completion, screen);
-        assert!(popup.y < screen.height);
-        assert!(popup.height > 0);
-    }
-}
-

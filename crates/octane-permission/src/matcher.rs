@@ -127,10 +127,12 @@ fn compile_tokens(pattern: &str) -> Vec<Regex> {
         .collect()
 }
 
-/// Token-prefix match against a command line.
+/// Whole-command match against a command line, token by token.
 ///
-/// The pattern matches if every one of its tokens matches the command's tokens
-/// at the same position — i.e. the pattern is a *prefix* of the command.
+/// The pattern matches only if it has the *same number* of tokens as the
+/// command and each one matches at its position. Deliberately not a prefix
+/// match, which is what Codex's execpolicy does: there a rule `cargo test`
+/// authorizes `cargo test --lib`, and here it does not.
 ///
 /// This is deliberately narrow. `command(npm run (build|test))` authorizes
 /// `npm run build`, but the extra tokens in `npm run build --prod` are *not*

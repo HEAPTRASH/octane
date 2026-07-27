@@ -2,7 +2,7 @@
 //!
 //! The loop must never contain a `match provider`. Every provider difference —
 //! empty-content filtering, tool-id format rules, where cache breakpoints go,
-//! whether reasoning replays — lives in [`transform`] and nowhere else. The loop
+//! whether reasoning replays — lives in [`codec`] and nowhere else. The loop
 //! only knows: send messages, receive a stream.
 //!
 //! [`LanguageModel`] is obtained through a *closure* rather than held as a
@@ -21,7 +21,6 @@ pub mod sse;
 pub mod pricing;
 pub mod stream;
 pub mod thinking;
-pub mod transform;
 pub mod transport;
 
 pub use api::ApiType;
@@ -33,7 +32,6 @@ pub use registry::Registry;
 pub use model::{LanguageModel, ModelInfo, ModelRequest, ModelSelector, ProviderId};
 pub use stream::{FinishReason, StreamEvent};
 pub use thinking::Thinking;
-pub use transform::ProviderTransform;
 pub use transport::{HttpModel, connect};
 
 #[derive(Debug, thiserror::Error)]

@@ -14,8 +14,6 @@ pub struct Skill {
     pub frontmatter: Frontmatter,
     /// Directory containing `SKILL.md`.
     pub root: Utf8PathBuf,
-    /// Project-local skills override user skills of the same name.
-    pub is_project_local: bool,
 }
 
 impl Skill {

@@ -132,7 +132,6 @@ fn request() -> ModelRequest {
         tools: Vec::new(),
         max_output_tokens: 1_024,
         temperature: None,
-        top_p: None,
         thinking: Default::default(),
     }
 }

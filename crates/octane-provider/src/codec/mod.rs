@@ -20,15 +20,14 @@ use crate::stream::StreamEvent;
 
 /// Per-format decoding state.
 ///
-/// Anthropic and the Responses API address content by index, so a decoder has to
-/// remember which block is which between events; a stateless `parse(event)`
-/// cannot. Completions carries the index in every chunk and needs almost none of
-/// this, but shares the type so the transport stays format-agnostic.
+/// Anthropic addresses content by index, so a decoder has to remember which
+/// block is which between events; a stateless `parse(event)` cannot. Completions
+/// carries the index in every chunk and needs almost none of this, but shares the
+/// type so the transport stays format-agnostic.
 #[derive(Debug, Default)]
 pub struct Decoder {
     api: Option<ApiType>,
     anthropic: anthropic::State,
-    responses: openai_responses::State,
     completion: openai_completion::State,
     google: google::State,
 }
@@ -48,7 +47,7 @@ impl Decoder {
             Some(ApiType::OpenAiCompletion) => {
                 openai_completion::decode(&mut self.completion, event)
             }
-            Some(ApiType::OpenAiResponses) => openai_responses::decode(&mut self.responses, event),
+            Some(ApiType::OpenAiResponses) => openai_responses::decode(event),
             Some(ApiType::Google) => google::decode(&mut self.google, event),
             None => Ok(Vec::new()),
         }
@@ -151,7 +150,6 @@ mod tests {
             }],
             max_output_tokens: 1_024,
             temperature: None,
-            top_p: None,
             thinking: Default::default(),
         }
     }

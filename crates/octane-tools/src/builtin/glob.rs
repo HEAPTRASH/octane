@@ -51,19 +51,8 @@ impl GlobTool {
     }
 
     fn root(&self, parsed: &Input, ctx: &ToolContext) -> Result<Utf8PathBuf, ToolError> {
-        match parsed.path.as_deref() {
-            Some(path) => {
-                let resolved = paths::resolve(path, &ctx.cwd, &ctx.workspace, true)?;
-                if !resolved.absolute.is_dir() {
-                    return Err(ToolError::Recoverable(format!(
-                        "{} is not a directory",
-                        resolved.display
-                    )));
-                }
-                Ok(resolved.absolute)
-            }
-            None => Ok(ctx.cwd.clone()),
-        }
+        let hint = "is not a directory";
+        paths::resolve_dir_or_cwd(parsed.path.as_deref(), &ctx.cwd, &ctx.workspace, hint)
     }
 }
 
@@ -109,7 +98,7 @@ impl Tool for GlobTool {
             .map_err(|error| ToolError::Recoverable(format!("invalid arguments: {error}")))?;
 
         let root = self.root(&parsed, ctx)?;
-        let matcher = build_matcher(&parsed.pattern)?;
+        let matcher = walk::glob_matcher(&parsed.pattern)?;
 
         let options = WalkOptions {
             limit: MAX_RESULTS,
@@ -167,31 +156,6 @@ impl Tool for GlobTool {
             "truncated": result.truncated,
         })))
     }
-}
-
-/// Compile a pattern, accepting the leading-`**/` form models reach for.
-///
-/// `**/*.rs` should find `main.rs` at the root as well as `src/main.rs`. Globset's
-/// `**` requires at least one component in some positions, so the bare-filename
-/// variant is added explicitly rather than leaving a surprising gap.
-fn build_matcher(pattern: &str) -> Result<globset::GlobSet, ToolError> {
-    let compile = |text: &str| {
-        globset::GlobBuilder::new(text)
-            .literal_separator(true)
-            .build()
-            .map_err(|error| ToolError::Recoverable(format!("invalid glob {text:?}: {error}")))
-    };
-
-    let mut builder = globset::GlobSetBuilder::new();
-    builder.add(compile(pattern)?);
-
-    if let Some(rest) = pattern.strip_prefix("**/") {
-        builder.add(compile(rest)?);
-    }
-
-    builder
-        .build()
-        .map_err(|error| ToolError::Recoverable(format!("invalid glob {pattern:?}: {error}")))
 }
 
 #[cfg(test)]

@@ -1165,19 +1165,21 @@ dependencies = [
  "async-trait",
  "camino",
  "clap",
- "crossterm",
+ "jiff",
+ "octane-commands",
  "octane-config",
  "octane-context",
  "octane-core",
+ "octane-mcp",
  "octane-memory",
  "octane-permission",
  "octane-protocol",
  "octane-provider",
  "octane-sandbox",
+ "octane-session",
  "octane-skills",
  "octane-tools",
  "octane-tui",
- "ratatui",
  "serde_json",
  "tokio",
  "tokio-util",
@@ -1192,8 +1194,8 @@ dependencies = [
  "camino",
  "serde",
  "serde_yaml",
+ "tempfile",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -1218,9 +1220,7 @@ dependencies = [
  "async-trait",
  "octane-protocol",
  "octane-provider",
- "serde",
  "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -1230,22 +1230,17 @@ dependencies = [
  "async-trait",
  "camino",
  "futures",
- "octane-commands",
  "octane-config",
  "octane-context",
- "octane-memory",
  "octane-permission",
  "octane-protocol",
  "octane-provider",
- "octane-sandbox",
- "octane-skills",
  "octane-tools",
  "serde",
  "serde_json",
  "thiserror",
  "tokio",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]
@@ -1253,15 +1248,16 @@ name = "octane-mcp"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "camino",
  "octane-permission",
  "octane-protocol",
- "octane-provider",
  "octane-tools",
+ "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1269,9 +1265,7 @@ name = "octane-memory"
 version = "0.0.0"
 dependencies = [
  "camino",
- "serde",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -1300,7 +1294,6 @@ version = "0.0.0"
 dependencies = [
  "async-stream",
  "async-trait",
- "bytes",
  "futures",
  "octane-protocol",
  "reqwest",
@@ -1309,7 +1302,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1323,6 +1315,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "octane-session"
+version = "0.0.0"
+dependencies = [
+ "camino",
+ "jiff",
+ "octane-protocol",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "octane-skills"
 version = "0.0.0"
 dependencies = [
@@ -1330,7 +1335,6 @@ dependencies = [
  "serde",
  "serde_yaml",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -1364,9 +1368,9 @@ dependencies = [
  "octane-core",
  "octane-permission",
  "octane-protocol",
- "octane-provider",
  "octane-tools",
  "ratatui",
+ "serde",
  "serde_json",
  "syntect",
  "tokio",

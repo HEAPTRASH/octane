@@ -12,7 +12,6 @@ camino.workspace = true
 serde.workspace = true
 serde_yaml = "0.9"
 thiserror.workspace = true
-tokio.workspace = true
 
 [lints]
 workspace = true

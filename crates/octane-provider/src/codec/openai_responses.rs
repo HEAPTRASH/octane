@@ -13,12 +13,6 @@ use crate::model::ModelRequest;
 use crate::stream::{FinishReason, StreamEvent};
 use crate::ProviderError;
 
-#[derive(Debug, Default)]
-pub struct State {
-    usage: Usage,
-    finish: Option<FinishReason>,
-}
-
 pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value {
     let mut input: Vec<serde_json::Value> = Vec::new();
     let mut instructions = String::new();
@@ -90,7 +84,7 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     body
 }
 
-pub fn decode(state: &mut State, event: &crate::sse::Event) -> Result<Vec<StreamEvent>, ProviderError> {
+pub fn decode(event: &crate::sse::Event) -> Result<Vec<StreamEvent>, ProviderError> {
     let value: serde_json::Value = serde_json::from_str(&event.data)
         .map_err(|error| ProviderError::Transport(format!("malformed event: {error}")))?;
 
@@ -141,7 +135,7 @@ pub fn decode(state: &mut State, event: &crate::sse::Event) -> Result<Vec<Stream
 
         "response.completed" | "response.incomplete" => {
             let response = &value["response"];
-            state.usage = read_usage(&response["usage"]);
+            let usage = read_usage(&response["usage"]);
 
             // A response with any function call in its output is a tool turn,
             // whatever the status says.
@@ -154,10 +148,10 @@ pub fn decode(state: &mut State, event: &crate::sse::Event) -> Result<Vec<Stream
             } else if response["incomplete_details"]["reason"] == "max_output_tokens" {
                 FinishReason::Length
             } else {
-                state.finish.take().unwrap_or(FinishReason::Stop)
+                FinishReason::Stop
             };
 
-            vec![StreamEvent::StepFinish { reason, usage: state.usage }]
+            vec![StreamEvent::StepFinish { reason, usage }]
         }
 
         "error" | "response.failed" => {
@@ -193,11 +187,10 @@ mod tests {
     use crate::codec::tests::{model, request};
 
     fn decode_all(chunks: &[&str]) -> Vec<StreamEvent> {
-        let mut state = State::default();
         chunks
             .iter()
             .flat_map(|c| {
-                decode(&mut state, &crate::sse::Event { name: None, data: c.to_string() }).unwrap()
+                decode(&crate::sse::Event { name: None, data: c.to_string() }).unwrap()
             })
             .collect()
     }
@@ -322,9 +315,7 @@ mod tests {
 
     #[test]
     fn a_failure_event_is_an_error() {
-        let mut state = State::default();
         let result = decode(
-            &mut state,
             &crate::sse::Event {
                 name: None,
                 data: r#"{"type":"response.failed","response":{"error":{"message":"rate limited"}}}"#.into(),

@@ -27,14 +27,9 @@ struct Input {
     content: String,
 }
 
+#[derive(Debug)]
 pub struct WriteTool {
     tracker: Arc<FileTracker>,
-}
-
-impl std::fmt::Debug for WriteTool {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("WriteTool").finish_non_exhaustive()
-    }
 }
 
 impl WriteTool {

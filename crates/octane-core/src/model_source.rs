@@ -66,7 +66,6 @@ impl StepSource for ModelStepSource {
             tools: self.tools.clone(),
             max_output_tokens: info.max_output_tokens,
             temperature: None,
-            top_p: None,
             thinking: self.thinking,
         };
 
@@ -225,10 +224,6 @@ mod tests {
             let events: Vec<Result<StreamEvent, ProviderError>> =
                 self.0.clone().into_iter().map(Ok).collect();
             Ok(Box::pin(futures::stream::iter(events)))
-        }
-
-        fn estimate_tokens(&self, _messages: &[Message]) -> u64 {
-            0
         }
     }
 

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use camino::Utf8PathBuf;
 use serde::Deserialize;
 
-use crate::content::looks_binary;
+use crate::content::{clip_line, looks_binary};
 use crate::paths;
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutcome};
 use crate::walk::{self, WalkOptions};
@@ -145,7 +145,7 @@ impl Tool for GrepTool {
         let file_filter = parsed
             .glob
             .as_deref()
-            .map(build_glob)
+            .map(walk::glob_matcher)
             .transpose()?;
 
         // A single file target is searched directly rather than walked, so
@@ -196,11 +196,11 @@ impl Tool for GrepTool {
             }
             let text = String::from_utf8_lossy(&bytes);
 
-            let matched: Vec<(usize, String)> = text
+            let matched: Vec<usize> = text
                 .lines()
                 .enumerate()
                 .filter(|(_, line)| regex.is_match(line))
-                .map(|(index, line)| (index + 1, line.to_string()))
+                .map(|(index, _)| index + 1)
                 .collect();
 
             if matched.is_empty() {
@@ -269,8 +269,8 @@ struct FileHits {
     display: String,
     /// Whole file, kept so context lines can be rendered without re-reading.
     lines: Vec<String>,
-    /// `(1-based line number, line text)`.
-    matched: Vec<(usize, String)>,
+    /// 1-based line numbers that matched; the text is in `lines`.
+    matched: Vec<usize>,
 }
 
 fn render_files(hits: &[FileHits]) -> String {
@@ -298,7 +298,7 @@ fn render_content(hits: &[FileHits], context: usize) -> String {
         out.push_str(&format!("{}\n", hit.display));
 
         let mut last_rendered: Option<usize> = None;
-        for (number, line) in &hit.matched {
+        for number in &hit.matched {
             let start = number.saturating_sub(context).max(1);
             let end = (number + context).min(hit.lines.len());
 
@@ -314,12 +314,8 @@ fn render_content(hits: &[FileHits], context: usize) -> String {
                 if last_rendered.is_some_and(|previous| current <= previous) {
                     continue;
                 }
-                let text = if current == *number {
-                    line.as_str()
-                } else {
-                    hit.lines.get(current - 1).map(String::as_str).unwrap_or_default()
-                };
-                out.push_str(&format!("{current:>6}: {}\n", clip(text)));
+                let text = hit.lines.get(current - 1).map(String::as_str).unwrap_or_default();
+                out.push_str(&format!("{current:>6}: {}\n", clip_line(text, MAX_LINE_LENGTH)));
                 last_rendered = Some(current);
             }
         }
@@ -327,33 +323,6 @@ fn render_content(hits: &[FileHits], context: usize) -> String {
     }
 
     out.trim_end().to_string()
-}
-
-fn clip(line: &str) -> String {
-    if line.chars().count() <= MAX_LINE_LENGTH {
-        return line.to_string();
-    }
-    let cut: String = line.chars().take(MAX_LINE_LENGTH).collect();
-    format!("{cut}… [line truncated]")
-}
-
-fn build_glob(pattern: &str) -> Result<globset::GlobSet, ToolError> {
-    let compile = |text: &str| {
-        globset::GlobBuilder::new(text)
-            .literal_separator(true)
-            .build()
-            .map_err(|error| ToolError::Recoverable(format!("invalid glob {text:?}: {error}")))
-    };
-
-    let mut builder = globset::GlobSetBuilder::new();
-    builder.add(compile(pattern)?);
-    // Same leading-`**/` accommodation as `glob`; see that tool for why.
-    if let Some(rest) = pattern.strip_prefix("**/") {
-        builder.add(compile(rest)?);
-    }
-    builder
-        .build()
-        .map_err(|error| ToolError::Recoverable(format!("invalid glob {pattern:?}: {error}")))
 }
 
 #[cfg(test)]

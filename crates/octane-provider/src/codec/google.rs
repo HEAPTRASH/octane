@@ -5,8 +5,8 @@
 //!
 //! The awkward part: Google does not stream tool calls. A `functionCall` arrives
 //! whole in a single chunk, so a caller cannot dispatch a tool while arguments
-//! are still arriving. [`ApiType::streams_tool_calls`] states this so it is a
-//! documented property rather than a mystery.
+//! are still arriving — the decoder emits `ToolCallStart` and `ToolCallEnd`
+//! back to back.
 
 use octane_protocol::{Part, Role, ToolCallId, Usage};
 use serde_json::json;
@@ -92,9 +92,6 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     }
     if let Some(temperature) = request.temperature.or(model.temperature) {
         body["generationConfig"]["temperature"] = json!(temperature);
-    }
-    if let Some(top_p) = request.top_p {
-        body["generationConfig"]["topP"] = json!(top_p);
     }
 
     // Google takes a budget, where 0 disables and -1 means "decide for me".

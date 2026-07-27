@@ -80,9 +80,6 @@ pub fn build(model: &ResolvedModel, request: &ModelRequest) -> serde_json::Value
     if let Some(temperature) = request.temperature.or(model.temperature) {
         body["temperature"] = json!(temperature);
     }
-    if let Some(top_p) = request.top_p {
-        body["top_p"] = json!(top_p);
-    }
 
     // Anthropic takes a token budget rather than a level, and requires the
     // budget to be below max_tokens — a budget at or above it is rejected.

@@ -54,19 +54,8 @@ impl ListTool {
         parsed: &Input,
         ctx: &ToolContext,
     ) -> Result<camino::Utf8PathBuf, ToolError> {
-        match parsed.path.as_deref() {
-            Some(path) => {
-                let resolved = paths::resolve(path, &ctx.cwd, &ctx.workspace, true)?;
-                if !resolved.absolute.is_dir() {
-                    return Err(ToolError::Recoverable(format!(
-                        "{} is a file, not a directory. Use `read` to see its contents.",
-                        resolved.display
-                    )));
-                }
-                Ok(resolved.absolute)
-            }
-            None => Ok(ctx.cwd.clone()),
-        }
+        let hint = "is a file, not a directory. Use `read` to see its contents.";
+        paths::resolve_dir_or_cwd(parsed.path.as_deref(), &ctx.cwd, &ctx.workspace, hint)
     }
 }
 

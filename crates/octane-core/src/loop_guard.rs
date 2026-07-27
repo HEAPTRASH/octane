@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::hash::{DefaultHasher, Hash, Hasher};
 
 /// Steps considered.
 pub const DEFAULT_WINDOW: usize = 10;
@@ -72,10 +73,6 @@ impl LoopGuard {
         }
         None
     }
-
-    pub fn reset(&mut self) {
-        self.signatures.clear();
-    }
 }
 
 /// Order-independent digest of a step's tool interactions.
@@ -89,14 +86,12 @@ fn signature_of(interactions: &[(String, String, String)]) -> String {
         .collect();
     parts.sort();
 
-    // Not cryptographic; this only needs to be a cheap equality key.
-    let joined = parts.join("\u{1}");
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in joined.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    // Not cryptographic, and never persisted or compared across runs; this only
+    // needs to be a cheap equality key, which `DefaultHasher` — fixed-key, so
+    // deterministic — already is.
+    let mut hasher = DefaultHasher::new();
+    parts.join("\u{1}").hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 #[cfg(test)]
@@ -162,17 +157,6 @@ mod tests {
         for _ in 0..20 {
             guard.record(&[]);
         }
-        assert!(guard.detect().is_none());
-    }
-
-    #[test]
-    fn reset_clears_history() {
-        let mut guard = LoopGuard::new(10, 5);
-        for _ in 0..10 {
-            guard.record(&call("read", "a.rs", "contents"));
-        }
-        assert!(guard.detect().is_some());
-        guard.reset();
         assert!(guard.detect().is_none());
     }
 }

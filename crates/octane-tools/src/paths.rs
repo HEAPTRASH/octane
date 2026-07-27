@@ -87,16 +87,30 @@ pub fn resolve(
     let inside_workspace =
         absolute == workspace_real || absolute.starts_with(&workspace_real);
 
-    let display = if inside_workspace {
-        absolute
-            .strip_prefix(&workspace_real)
-            .map(|relative| relative.to_string())
-            .unwrap_or_else(|_| absolute.to_string())
-    } else {
-        absolute.to_string()
-    };
+    let display = crate::walk::display_path(&absolute, &workspace_real);
 
     Ok(ResolvedPath { absolute, display, inside_workspace })
+}
+
+/// Resolve an optional directory argument, defaulting to `cwd`.
+///
+/// What every directory-scoped tool needs: an absent `path` means "here", and a
+/// present one must name a directory. `not_a_dir_hint` completes the sentence
+/// after the displayed path, so each tool can name its own alternative.
+pub fn resolve_dir_or_cwd(
+    path: Option<&str>,
+    cwd: &Utf8Path,
+    workspace: &Utf8Path,
+    not_a_dir_hint: &str,
+) -> Result<Utf8PathBuf, ToolError> {
+    let Some(path) = path else { return Ok(cwd.to_owned()) };
+
+    let resolved = resolve(path, cwd, workspace, true)?;
+    if !resolved.absolute.is_dir() {
+        let message = format!("{} {not_a_dir_hint}", resolved.display);
+        return Err(ToolError::Recoverable(message));
+    }
+    Ok(resolved.absolute)
 }
 
 fn canonicalize(path: &Utf8Path) -> Option<Utf8PathBuf> {

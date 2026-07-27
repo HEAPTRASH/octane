@@ -45,7 +45,6 @@ pub enum FinishReason {
     Length,
     /// Provider-side content filtering.
     ContentFilter,
-    Error,
 }
 
 impl FinishReason {

@@ -63,11 +63,6 @@ impl ToolRegistry {
             .map(|tool| tool.schema())
             .collect()
     }
-
-    /// Convenience for read-only agents.
-    pub fn read_only_schemas(&self) -> Vec<ToolSchema> {
-        self.schemas_where(|tool| !tool.is_mutating())
-    }
 }
 
 impl std::fmt::Debug for ToolRegistry {

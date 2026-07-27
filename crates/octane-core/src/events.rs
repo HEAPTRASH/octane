@@ -33,10 +33,6 @@ impl EventSink {
         Self { sender, turn: TurnId::new() }
     }
 
-    pub fn turn(&self) -> &TurnId {
-        &self.turn
-    }
-
     /// Send an event. Failure means nobody is listening, which is not an error.
     pub fn send(&self, event: Event) {
         let _ = self.sender.send(event);

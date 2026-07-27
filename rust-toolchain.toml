@@ -3,3 +3,9 @@
 # so this is reproducible without hardcoding a version we then have to bump.
 channel = "stable"
 components = ["rustc", "cargo", "rustfmt", "clippy", "rust-src", "rust-analyzer"]
+
+# Windows std, so `cargo check --target x86_64-pc-windows-msvc` typechecks the
+# Windows sandbox backend from a Unix machine. `check` does not link, so no
+# Windows linker is needed — but without the target's std it cannot even parse
+# the platform cfg, and the backend would be unverifiable until CI ran it.
+targets = ["x86_64-pc-windows-msvc"]

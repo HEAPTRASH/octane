@@ -12,8 +12,6 @@ use std::collections::HashSet;
 
 use camino::{Utf8Path, Utf8PathBuf};
 
-use crate::MemoryError;
-
 /// Nesting limit. Deep import chains make it impossible for a user to reason
 /// about what the agent was actually told.
 pub const MAX_IMPORT_DEPTH: usize = 3;
@@ -23,13 +21,14 @@ pub const MAX_IMPORT_DEPTH: usize = 3;
 /// Resolution is relative to the importing file's directory. Imports that escape
 /// `root`, do not exist, or are not files are left as literal text: a broken
 /// import should be visible in the prompt, not silently dropped, or the user will
-/// wonder why their instructions had no effect.
+/// wonder why their instructions had no effect. That is also why this cannot
+/// fail: every bound is handled by leaving the line alone.
 pub fn resolve_imports(
     content: &str,
     base_dir: &Utf8Path,
     root: &Utf8Path,
     imported: &mut Vec<Utf8PathBuf>,
-) -> Result<String, MemoryError> {
+) -> String {
     let mut seen = HashSet::new();
     resolve_recursive(content, base_dir, root, 0, &mut seen, imported)
 }
@@ -41,7 +40,7 @@ fn resolve_recursive(
     depth: usize,
     seen: &mut HashSet<Utf8PathBuf>,
     imported: &mut Vec<Utf8PathBuf>,
-) -> Result<String, MemoryError> {
+) -> String {
     let mut out = String::with_capacity(content.len());
 
     for line in content.lines() {
@@ -70,7 +69,7 @@ fn resolve_recursive(
 
                 let nested_dir = resolved.parent().unwrap_or(root).to_owned();
                 let expanded =
-                    resolve_recursive(&nested, &nested_dir, root, depth + 1, seen, imported)?;
+                    resolve_recursive(&nested, &nested_dir, root, depth + 1, seen, imported);
 
                 // Fenced with provenance so the model can tell imported material
                 // from the importing file's own instructions.
@@ -86,7 +85,7 @@ fn resolve_recursive(
         }
     }
 
-    Ok(out)
+    out
 }
 
 /// Recognize a line that is *only* an `@path` reference.
@@ -158,8 +157,7 @@ mod tests {
             Utf8Path::new("/proj/sub"),
             Utf8Path::new("/proj"),
             &mut imported,
-        )
-        .unwrap();
+        );
 
         // Left as literal text, and nothing was read.
         assert!(result.contains("@../../../../etc/passwd"));
@@ -174,8 +172,7 @@ mod tests {
             Utf8Path::new("/nonexistent"),
             Utf8Path::new("/nonexistent"),
             &mut imported,
-        )
-        .unwrap();
+        );
         assert!(result.contains("@docs/nope.md"));
         assert!(imported.is_empty());
     }
@@ -185,7 +182,7 @@ mod tests {
         let mut imported = Vec::new();
         let content = "# Project\n\nUse tabs.\n";
         let result =
-            resolve_imports(content, Utf8Path::new("/p"), Utf8Path::new("/p"), &mut imported).unwrap();
+            resolve_imports(content, Utf8Path::new("/p"), Utf8Path::new("/p"), &mut imported);
         assert_eq!(result, content);
     }
 }

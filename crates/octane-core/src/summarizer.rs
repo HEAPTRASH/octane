@@ -80,7 +80,6 @@ impl Summarizer for ModelSummarizer {
             tools: Vec::new(),
             max_output_tokens: info.max_output_tokens.min(2_000),
             temperature: None,
-            top_p: None,
             thinking: octane_provider::Thinking::Off,
         };
 

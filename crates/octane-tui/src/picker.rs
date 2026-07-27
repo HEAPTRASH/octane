@@ -7,6 +7,10 @@
 //! Pure state: items in, a selection out. The rendering and the keys live
 //! elsewhere, so every rule below is testable by calling a method.
 
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+
 /// What a selection is for, so the caller knows what to do with it.
 ///
 /// `SettingValue` carries the setting being edited rather than leaving the
@@ -18,6 +22,8 @@
 pub enum PickerKind {
     Provider,
     Model,
+    /// Which recorded session to resume.
+    Session,
     /// Choosing which setting to change.
     Setting,
     /// Choosing the value for the named setting.
@@ -204,6 +210,191 @@ impl Picker {
         item.enabled.then_some(item.key.as_str())
     }
 
+}
+
+/// The picker, and the rows it needs including its border.
+///
+/// The height comes from the lines actually built, because a second count kept
+/// in step by hand drifts: undercounting clips the hint line, which is the line
+/// that says what Esc will do, and overcounting leaves a dead row in the box.
+pub fn widget<'a>(
+    stack: &[Picker],
+    theme: &crate::theme::Theme,
+    glyphs: &crate::glyphs::Glyphs,
+) -> (Paragraph<'a>, u16) {
+    let Some(picker) = stack.last() else { return (Paragraph::new(Vec::<Line>::new()), 0) };
+    let (visible, highlight) = picker.visible();
+    let total = picker.matches().len();
+
+    // Padded past the longest label rather than to a guessed width, or a long
+    // one runs straight into its state with no gap — `Ollama (local)ready`.
+    let column = visible
+        .iter()
+        .map(|item| item.label.chars().count())
+        .max()
+        .unwrap_or(0)
+        + 2;
+
+    // The ratio is what makes a short list self-explaining: without a
+    // denominator, "one result" and "one result out of two hundred" look the
+    // same, and a filter that excluded everything looks like an empty menu.
+    let ratio = format!("{total}/{}", picker.len());
+    let head = if picker.filter().is_empty() {
+        "type to filter".to_string()
+    } else {
+        format!("{} {}", glyphs.prompt, picker.filter())
+    };
+    let mut lines = vec![Line::from(vec![
+        Span::styled(head, theme.dim()),
+        Span::styled(format!("   {ratio}"), theme.dim()),
+    ])];
+    lines.push(Line::default());
+
+    if visible.is_empty() {
+        // Echoes the query, because the usual cause is a typo the user cannot
+        // see from the result, and names the way out.
+        lines.push(Line::styled(
+            format!("  nothing matches {:?}", picker.filter()),
+            theme.dim(),
+        ));
+        lines.push(Line::styled(
+            "  backspace to narrow less, esc to clear the filter",
+            theme.dim(),
+        ));
+    }
+
+    for (index, item) in visible.iter().enumerate() {
+        let selected = index == highlight;
+        let marker = if selected { glyphs.edit } else { " " };
+
+        let label_style = if !item.enabled {
+            theme.dim()
+        } else if selected {
+            theme.signal(theme.accent)
+        } else {
+            Style::default().fg(theme.assistant)
+        };
+
+        // Underlined, not bold: the selected row is already bold, so a bold
+        // span inside it is invisible on exactly the row being looked at.
+        let label = {
+            let padded = format!("{:<column$}", item.label);
+            match picker.match_span(item) {
+                Some((start, len)) => {
+                    let chars: Vec<char> = padded.chars().collect();
+                    let cut = |a: usize, b: usize| chars[a.min(chars.len())..b.min(chars.len())]
+                        .iter()
+                        .collect::<String>();
+                    vec![
+                        Span::styled(cut(0, start), label_style),
+                        Span::styled(
+                            cut(start, start + len),
+                            label_style.add_modifier(ratatui::style::Modifier::UNDERLINED),
+                        ),
+                        Span::styled(cut(start + len, chars.len()), label_style),
+                    ]
+                }
+                None => vec![Span::styled(padded, label_style)],
+            }
+        };
+
+        let marker_style =
+            if selected && item.enabled { theme.signal(theme.accent) } else { theme.accent() };
+        let mut spans = vec![Span::styled(format!("{marker} "), marker_style)];
+        if let Some(chosen) = item.selected_value {
+            let glyph = if chosen { glyphs.radio_on } else { glyphs.radio_off };
+            spans.push(Span::styled(
+                format!("{glyph} "),
+                if selected && item.enabled {
+                    theme.signal(theme.accent)
+                } else if chosen {
+                    theme.accent()
+                } else {
+                    theme.dim()
+                },
+            ));
+        }
+        spans.extend(label);
+        if let Some(state) = &item.state {
+            // The state is why a row is or is not usable, so it earns colour.
+            let style = if selected && item.enabled {
+                theme.signal(theme.accent)
+            } else if item.enabled {
+                theme.dim()
+            } else {
+                theme.label(theme.warning)
+            };
+            spans.push(Span::styled(state.clone(), style));
+        }
+        let row = Line::from(spans);
+        lines.push(if selected && item.enabled {
+            row.style(theme.signal(theme.accent))
+        } else {
+            row
+        });
+
+        // Under the highlight only. Every row would triple the box height and
+        // bury the list the detail is meant to explain.
+        if selected && !item.detail.is_empty() {
+            lines.push(Line::styled(format!("      {}", item.detail), theme.dim()));
+        }
+    }
+
+    // `visible()` windows to MAX_VISIBLE and says nothing about the remainder,
+    // so a long list looked complete. The ratio above counts matches, not rows
+    // on screen.
+    let hidden = total.saturating_sub(visible.len());
+    if hidden > 0 {
+        lines.push(Line::styled(format!("  [+ {hidden} more]"), theme.dim()));
+    }
+
+    lines.push(Line::default());
+    // Names what Esc will actually do, which now depends on both the filter
+    // and the depth. A fixed "esc cancel" was a lie at every level but one.
+    let escape = if !picker.filter().is_empty() {
+        "esc clear filter".to_string()
+    } else if stack.len() > 1 {
+        match stack.get(stack.len() - 2) {
+            Some(parent) => format!("esc back to {}", parent.title),
+            None => "esc back".to_string(),
+        }
+    } else {
+        "esc close".to_string()
+    };
+    lines.push(Line::styled(
+        format!(
+            "  {}{} move   enter choose   {escape}",
+            glyphs.arrow_up, glyphs.arrow_down
+        ),
+        theme.dim(),
+    ));
+
+    // The trail is built from the stack itself, so it cannot drift from where
+    // the user actually is. Ancestors are dimmed and only the active level is
+    // emphasised, which keeps the distinction under NO_COLOR: `theme.label`
+    // falls back to BOLD when there is no colour to use.
+    let mut title = vec![Span::styled(" SELECT / ", theme.accent())];
+    for (index, level) in stack.iter().enumerate() {
+        if index > 0 {
+            title.push(Span::styled(format!(" {} ", glyphs.prompt), theme.dim()));
+        }
+        let last = index + 1 == stack.len();
+        title.push(Span::styled(
+            level.title.clone(),
+            if last { theme.label(theme.accent) } else { theme.dim() },
+        ));
+    }
+    title.push(Span::raw(" "));
+
+    let height = u16::try_from(lines.len()).unwrap_or(14) + 2; // borders
+    let widget = Paragraph::new(lines).style(theme.panel()).block(
+        Block::default()
+            .style(theme.panel())
+            .borders(Borders::ALL)
+            .border_style(theme.dim())
+            .title(Line::from(title)),
+    );
+    (widget, height)
 }
 
 #[cfg(test)]

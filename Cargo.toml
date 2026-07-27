@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.0.0"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT"
+license = "MIT AND Apache-2.0"
 repository = "https://github.com/raymond/octane-agent"
 
 [workspace.dependencies]
@@ -20,6 +20,7 @@ octane-memory = { path = "crates/octane-memory" }
 octane-permission = { path = "crates/octane-permission" }
 octane-protocol = { path = "crates/octane-protocol" }
 octane-provider = { path = "crates/octane-provider" }
+octane-session = { path = "crates/octane-session" }
 octane-sandbox = { path = "crates/octane-sandbox" }
 octane-skills = { path = "crates/octane-skills" }
 octane-tools = { path = "crates/octane-tools" }
@@ -27,7 +28,6 @@ octane-tui = { path = "crates/octane-tui" }
 
 # async
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "fs", "io-util", "sync", "time", "signal"] }
-tokio-stream = "0.1"
 async-trait = "0.1"
 futures = "0.3"
 
@@ -55,9 +55,6 @@ regex = "1"
 # http: rustls rather than native-tls, so there is no OpenSSL to find at build
 # time and no system dependency to explain to anyone.
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "charset", "http2"] }
-bytes = "1"
-async-stream = "0.3"
-url = "2"
 
 # misc
 uuid = { version = "1", features = ["v7", "serde"] }

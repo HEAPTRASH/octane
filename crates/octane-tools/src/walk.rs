@@ -11,6 +11,8 @@
 
 use camino::{Utf8Path, Utf8PathBuf};
 
+use crate::tool::ToolError;
+
 /// How to traverse.
 #[derive(Debug, Clone)]
 pub struct WalkOptions {
@@ -149,6 +151,31 @@ pub fn sort_by_recency(entries: &mut [Entry]) {
 /// Render a path relative to `root` when it is inside it.
 pub fn display_path(path: &Utf8Path, root: &Utf8Path) -> String {
     path.strip_prefix(root).map(ToString::to_string).unwrap_or_else(|_| path.to_string())
+}
+
+/// Compile a pattern, accepting the leading-`**/` form models reach for.
+///
+/// `**/*.rs` should find `main.rs` at the root as well as `src/main.rs`. Globset's
+/// `**` requires at least one component in some positions, so the bare-filename
+/// variant is added explicitly rather than leaving a surprising gap.
+pub fn glob_matcher(pattern: &str) -> Result<globset::GlobSet, ToolError> {
+    let compile = |text: &str| {
+        globset::GlobBuilder::new(text)
+            .literal_separator(true)
+            .build()
+            .map_err(|error| ToolError::Recoverable(format!("invalid glob {text:?}: {error}")))
+    };
+
+    let mut builder = globset::GlobSetBuilder::new();
+    builder.add(compile(pattern)?);
+
+    if let Some(rest) = pattern.strip_prefix("**/") {
+        builder.add(compile(rest)?);
+    }
+
+    builder
+        .build()
+        .map_err(|error| ToolError::Recoverable(format!("invalid glob {pattern:?}: {error}")))
 }
 
 #[cfg(test)]

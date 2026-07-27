@@ -62,12 +62,6 @@ pub struct Plan {
     pub end: usize,
 }
 
-impl Plan {
-    pub fn is_empty(&self) -> bool {
-        self.end <= self.start
-    }
-}
-
 /// Choose the span to summarize.
 ///
 /// `preserved_prefix` is how many leading messages are the cached prompt

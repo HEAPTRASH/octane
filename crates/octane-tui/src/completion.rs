@@ -8,6 +8,11 @@
 //! `crates/octane-cli/src/main.rs`. Prefix matching would force the user to know
 //! where a file lives before they can ask for it, which defeats the point.
 
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Paragraph};
+
 /// What the caret is currently sitting in.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum Trigger {
@@ -288,9 +293,208 @@ fn matches_subsequence(haystack: &str, needle: &[char]) -> bool {
     needle.iter().all(|want| chars.any(|ch| ch == *want))
 }
 
+/// The popup, laid out for `width` columns.
+///
+/// Two columns, both sized here rather than by the caller. Names are padded past
+/// the longest one so the details line up — ragged, they read as a list of
+/// unrelated strings rather than a table — and each detail is elided to whatever
+/// is left. Eliding here rather than at the source is what makes it correct:
+/// only this function knows how wide the popup is, and a description cut to a
+/// fixed guess is either still too long or needlessly short.
+pub fn widget<'a>(
+    completion: &Completion,
+    width: u16,
+    theme: &crate::theme::Theme,
+    glyphs: &crate::glyphs::Glyphs,
+) -> Paragraph<'a> {
+    const MARKER: usize = 2;
+    const GAP: usize = 2;
+
+    let (visible, highlight) = completion.visible();
+
+    // Padded past the longest name, exactly as the picker does. Capped, so one
+    // pathological entry cannot push every description off the right edge.
+    let inside = usize::from(width).saturating_sub(2);
+    let name_column = visible
+        .iter()
+        .map(|candidate| candidate.value.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(inside.saturating_sub(MARKER + GAP) / 2);
+    let detail_room = inside.saturating_sub(MARKER + name_column + GAP);
+
+    let lines: Vec<Line> = visible
+        .iter()
+        .enumerate()
+        .map(|(index, candidate)| {
+            let selected = index == highlight;
+            // From the set, or the ASCII fallback stops at the transcript.
+            let marker = if selected { format!("{} ", glyphs.edit) } else { "  ".to_string() };
+            let style = if selected {
+                theme.signal(theme.accent)
+            } else {
+                Style::default().fg(theme.assistant)
+            };
+            let line = Line::from(vec![
+                Span::styled(
+                    marker,
+                    if selected {
+                        theme.signal(theme.accent)
+                    } else {
+                        theme.accent()
+                    },
+                ),
+                Span::styled(format!("{:<name_column$}", candidate.value), style),
+                Span::styled(
+                    format!(
+                        "{:GAP$}{}",
+                        "",
+                        crate::render::truncate(&candidate.detail, detail_room, glyphs.ellipsis)
+                    ),
+                    if selected {
+                        theme.signal(theme.accent)
+                    } else {
+                        theme.dim()
+                    },
+                ),
+            ]);
+            if selected {
+                line.style(theme.signal(theme.accent))
+            } else {
+                line
+            }
+        })
+        .collect();
+
+    Paragraph::new(lines)
+        .style(theme.panel())
+        .block(
+            Block::default()
+                .style(theme.panel())
+                .borders(Borders::ALL)
+                .border_style(theme.dim())
+                .title(Span::styled(" INDEX / MATCHES ", theme.accent())),
+        )
+}
+
+
+/// Place the popup directly above the composer, clamped to the screen.
+pub fn popup_area(composer: Rect, completion: &Completion, screen: Rect) -> Rect {
+    let rows = (completion.visible().0.len() as u16).min(MAX_VISIBLE as u16) + 2;
+    let height = rows.min(screen.height.saturating_sub(composer.height).max(3));
+    let width = composer.width;
+
+    Rect {
+        x: composer.x,
+        y: composer.y.saturating_sub(height),
+        width,
+        height,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn popup(width: u16) -> ratatui::buffer::Buffer {
+        let mut completion = Completion::default();
+        completion.update(
+            "/",
+            1,
+            &[
+                Candidate::new("/cs", "search the codebase with parallel research agents"),
+                Candidate::new("/rust-review", "Reviews Rust for the defects that actually ship in this codebase. Use after any change."),
+            ],
+            &[],
+        );
+        let area = ratatui::layout::Rect::new(0, 0, width, 6);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        ratatui::widgets::Widget::render(
+            widget(&completion, width, &crate::theme::Theme::default(), &crate::glyphs::UNICODE),
+            area,
+            &mut buf,
+        );
+        buf
+    }
+
+    fn row(buf: &ratatui::buffer::Buffer, y: u16) -> String {
+        (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()
+    }
+
+    /// Ragged, the popup reads as a list of unrelated strings rather than a
+    /// table. The picker already aligns; this is the same rule.
+    #[test]
+    fn every_detail_starts_in_the_same_column() {
+        let buf = popup(100);
+        // Columns, not bytes: the border and the selection marker are three
+        // bytes each, so a byte offset says these disagree when they align.
+        let column = |y, needle: &str| {
+            let text = row(&buf, y);
+            text.char_indices().position(|(i, _)| text[i..].starts_with(needle)).expect(needle)
+        };
+        assert_eq!(
+            column(1, "search"),
+            column(2, "Reviews"),
+            "details must line up:\n{:?}\n{:?}",
+            row(&buf, 1),
+            row(&buf, 2),
+        );
+    }
+
+    /// The bug this replaced cut descriptions to a fixed 70 characters at the
+    /// source, which ended one entry mid-sentence on the word "Use" while the
+    /// popup had room to spare.
+    #[test]
+    fn a_long_detail_is_elided_at_the_edge_rather_than_at_a_guess() {
+        let buf = popup(100);
+        let text = row(&buf, 2);
+        assert!(text.contains('\u{2026}'), "a clipped detail must say so: {text:?}");
+        assert!(text.chars().count() as u16 <= 100, "the line must not exceed the popup");
+    }
+
+    /// A terminal narrow enough that the name column alone would consume the row.
+    /// The arithmetic is all `saturating_sub`, so the failure mode is a panic on
+    /// a bad format width rather than a wrong pixel.
+    #[test]
+    fn a_narrow_popup_still_renders() {
+        for width in 4..=24 {
+            let buf = popup(width);
+            for y in 0..buf.area.height {
+                assert_eq!(row(&buf, y).chars().count() as u16, width);
+            }
+        }
+    }
+
+    #[test]
+    fn the_popup_sits_above_the_composer() {
+        let screen = Rect::new(0, 0, 80, 30);
+        let composer = Rect::new(0, 24, 80, 4);
+
+        let mut completion = Completion::default();
+        let files: Vec<String> = (0..20).map(|i| format!("src/f{i}.rs")).collect();
+        completion.update("@f", 2, &[], &files);
+
+        let popup = popup_area(composer, &completion, screen);
+
+        assert!(popup.y + popup.height <= composer.y, "popup must not cover the input");
+        assert_eq!(popup.x, composer.x);
+        assert_eq!(popup.width, composer.width);
+    }
+
+    #[test]
+    fn the_popup_never_runs_off_the_top() {
+        // A short terminal with a tall draft is the case that overflows.
+        let screen = Rect::new(0, 0, 80, 10);
+        let composer = Rect::new(0, 2, 80, 6);
+
+        let mut completion = Completion::default();
+        let files: Vec<String> = (0..50).map(|i| format!("src/f{i}.rs")).collect();
+        completion.update("@f", 2, &[], &files);
+
+        let popup = popup_area(composer, &completion, screen);
+        assert!(popup.y < screen.height);
+        assert!(popup.height > 0);
+    }
 
     fn commands() -> Vec<Candidate> {
         vec![

@@ -9,7 +9,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use octane_protocol::Message;
 
 use crate::api::ApiType;
 use crate::codec::{self, Decoder};
@@ -203,25 +202,6 @@ impl LanguageModel for HttpModel {
         };
 
         Ok(Box::pin(stream))
-    }
-
-    fn estimate_tokens(&self, messages: &[Message]) -> u64 {
-        // ~4 bytes per token. Crude by design: exact counts come back in usage,
-        // and this only has to be good enough to decide when to compact.
-        let bytes: usize = messages
-            .iter()
-            .flat_map(|message| &message.parts)
-            .map(|part| match part {
-                octane_protocol::Part::Text { text }
-                | octane_protocol::Part::Reasoning { text }
-                | octane_protocol::Part::Synthetic { text } => text.len(),
-                octane_protocol::Part::ToolCall(call) => call.name.len() + call.input.len(),
-                octane_protocol::Part::ToolResult(result) => result.output.len(),
-                octane_protocol::Part::File { path, content } => path.len() + content.len(),
-                octane_protocol::Part::Image { .. } => 4_000,
-            })
-            .sum();
-        (bytes / 4) as u64
     }
 }
 

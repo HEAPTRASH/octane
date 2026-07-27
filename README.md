@@ -225,7 +225,8 @@ One responsibility per crate, with strictly one-way dependencies.
 | `octane-skills` | skill discovery, progressive disclosure |
 | `octane-commands` | slash command discovery and template expansion |
 | `octane-config` | `.octane/` discovery, settings, agent definitions |
-| `octane-mcp` | MCP JSON-RPC lifecycle, stdio transport, adapter |
+| `octane-mcp` | MCP JSON-RPC lifecycle, stdio + HTTP transports, adapter |
+| `octane-session` | Recording and resuming sessions as append-only JSONL |
 | `octane-core` | the turn loop, agents, prompt assembly, stop conditions |
 | `octane-tui` | composer, keymap, rendering, approvals |
 | `octane-cli` | argument parsing, config resolution |
@@ -269,7 +270,8 @@ Decisions that are not obvious from the code:
 - An unsupported platform is a sandbox error, not a pass.
 - Tool schemas live in a `BTreeMap`. They sit in the cached prompt
   prefix, so hash-map iteration order would reorder them between turns
-  and void every cache hit. Codex shipped this bug with MCP tools.
+  and void every cache hit. Codex still orders MCP tools by `HashMap`
+  iteration, which changes the prefix on every restart.
 - The prompt is append-only. Configuration that changes mid-session is
   appended as a developer message, never edited into what was sent.
 - The system prompt is assembled once per session, most-static first:
@@ -308,17 +310,70 @@ Decisions that are not obvious from the code:
 - Esc interrupts and does not exit. `ctrl+d` exits only on an empty
   composer.
 
+## MCP
+
+Servers are declared per config root in `mcp.json`, using the same
+`mcpServers` key Claude Code and Cursor use so an existing config ports
+over unchanged:
+
+```json
+{
+  "mcpServers": {
+    "linter": {
+      "command": "npx",
+      "args": ["-y", "@example/lint-mcp"],
+      "env": { "LINT_TOKEN": "${LINT_TOKEN}" }
+    }
+  }
+}
+```
+
+Values are `${VAR}` references rather than secrets, so the file stays
+committable. An unset variable is an error, not an empty string.
+
+A remote server is declared by `url` instead of `command`, with `headers`
+carrying auth under the same `${VAR}` rule:
+
+```json
+{
+  "mcpServers": {
+    "hosted": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer ${EXAMPLE_TOKEN}" }
+    }
+  }
+}
+```
+
+`command` and `url` are mutually exclusive; naming both, or neither, is
+refused rather than guessed. Redirects are not followed — nothing in the
+MCP flow needs one, and following it would re-send the token to whatever
+host the server named. A `401` is an error, not the start of OAuth
+Dynamic Client Registration: registering this client with an arbitrary
+remote authorization server is a decision the user should make.
+
+Servers are spawned once at session start, not per turn. Their tools enter
+the **same registry** as the built-ins under `mcp__<server>__<tool>` and
+the **same permission engine** as `mcp(server/tool)`, so `mcp(linter/*)`
+allows a whole server. Every MCP tool reports itself as mutating — effects
+are opaque and a schema cannot be trusted to reveal them — so `plan` mode
+withholds them. Server `instructions` ride as a fenced, attributed
+developer message behind project memory; they are third-party text and
+never outrank the harness.
+
+A server that fails to spawn or refuses the handshake is reported and
+skipped. One bad entry does not stop a session opening.
+
 ## Not yet wired
 
 Written and tested, but not reachable from the binary:
 
-- MCP. `octane-mcp` speaks the protocol and the permission engine models
-  MCP tools, but nothing spawns a server and the crate is not in the
-  binary's dependency tree.
 - Skills reaching the model. `/name` prints a skill body into the
   transcript, and the tier-1 manifest is not in the system prompt.
-- File-based slash commands. `octane-commands` discovers and expands
-  `.octane/commands/*.md`; the binary's command list is hardcoded.
+- Windows containment. macOS (Seatbelt) and Linux (bubblewrap) are both
+  verified against a real kernel; Windows refuses unless it detects WSL
+  or a container. See `octane-sandbox::windows` for why a restricted
+  token is not good enough.
 - `faster-model`. Used for compaction; nothing else asks for the faster
   role yet.
 

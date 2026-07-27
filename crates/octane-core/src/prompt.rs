@@ -69,6 +69,8 @@ pub struct PromptAssembler {
     sandbox_description: Option<String>,
     skill_manifest: Option<String>,
     memory: Option<String>,
+    /// Fenced, attributed guidance from connected MCP servers.
+    mcp_instructions: Option<String>,
 }
 
 impl PromptAssembler {
@@ -103,6 +105,21 @@ impl PromptAssembler {
         self
     }
 
+    /// Guidance supplied by connected MCP servers.
+    ///
+    /// Third-party text, already fenced and attributed by
+    /// `McpClient::rendered_instructions`. It rides as a developer message like
+    /// the rest of the static context, *after* project memory: a server
+    /// describes how to use its own tools and must not read as though it
+    /// outranked the project's own instructions.
+    pub fn mcp_instructions(mut self, rendered: impl Into<String>) -> Self {
+        let rendered = rendered.into();
+        if !rendered.trim().is_empty() {
+            self.mcp_instructions = Some(rendered);
+        }
+        self
+    }
+
     /// How many messages `assemble` puts in front of the history.
     ///
     /// The runner needs this to know which leading messages are the cached
@@ -113,6 +130,7 @@ impl PromptAssembler {
             self.sandbox_description.is_some(),
             self.skill_manifest.is_some(),
             self.memory.is_some(),
+            self.mcp_instructions.is_some(),
             self.environment.is_some(),
         ]
         .into_iter()
@@ -140,6 +158,9 @@ impl PromptAssembler {
         }
         if let Some(memory) = &self.memory {
             messages.push(Message::text(Role::Developer, memory));
+        }
+        if let Some(instructions) = &self.mcp_instructions {
+            messages.push(Message::text(Role::Developer, instructions));
         }
         if let Some(environment) = &self.environment {
             messages.push(Message::text(Role::Developer, environment));
@@ -171,9 +192,8 @@ impl PromptAssembler {
 /// Sort tool schemas by name.
 ///
 /// Belongs here rather than in the provider layer so that the invariant is
-/// visible at the point where the prompt is built. Also applied by
-/// `ProviderTransform::tools` as a backstop, because being wrong about this is
-/// expensive and silent.
+/// visible at the point where the prompt is built, and applied in exactly one
+/// place, because being wrong about this is expensive and silent.
 pub fn sorted_tools(mut tools: Vec<ToolSchema>) -> Vec<ToolSchema> {
     tools.sort_by(|a, b| a.name.cmp(&b.name));
     tools
@@ -196,6 +216,40 @@ pub fn mode_switch_notice(from: &str, to: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Server guidance must land in the cached prefix and behind project memory.
+    ///
+    /// In front of it, a third-party server would read as outranking the
+    /// project's own instructions; outside the preamble, it would sit in the
+    /// history where compaction can drop it.
+    #[test]
+    fn mcp_instructions_ride_in_the_preamble_after_memory() {
+        let assembler = PromptAssembler::new("base")
+            .memory("project rules")
+            .mcp_instructions("<mcp-server-instructions server=\"x\" trust=\"third-party\">hi</mcp-server-instructions>");
+
+        let messages = assembler.assemble(&[], None);
+        assert_eq!(messages.len(), assembler.preamble_len(), "preamble_len must match");
+
+        let memory =
+            messages.iter().position(|m| m.text_content().contains("project rules")).unwrap();
+        let mcp = messages
+            .iter()
+            .position(|m| m.text_content().contains("mcp-server-instructions"))
+            .unwrap();
+        assert!(mcp > memory, "server guidance must not precede project memory");
+        assert_eq!(messages[mcp].role, Role::Developer, "it is context, never a system rule");
+    }
+
+    /// No servers, no message — and critically, no change to `preamble_len`, or
+    /// every existing session's cached prefix would shift by one.
+    #[test]
+    fn no_servers_adds_nothing_to_the_prefix() {
+        let bare = PromptAssembler::new("base");
+        let empty = PromptAssembler::new("base").mcp_instructions("   ");
+        assert_eq!(bare.preamble_len(), empty.preamble_len());
+        assert_eq!(bare.assemble(&[], None).len(), empty.assemble(&[], None).len());
+    }
 
     fn assembler() -> PromptAssembler {
         PromptAssembler::new("You are octane.")

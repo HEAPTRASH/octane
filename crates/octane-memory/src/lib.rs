@@ -46,10 +46,4 @@ pub const LOCAL_MEMORY_FILENAME: &str = "OCTANE.local.md";
 pub enum MemoryError {
     #[error("reading {path}: {source}")]
     Io { path: String, #[source] source: std::io::Error },
-
-    #[error("import cycle detected: {0}")]
-    ImportCycle(String),
-
-    #[error("import depth limit ({limit}) exceeded at {path}")]
-    ImportTooDeep { path: String, limit: usize },
 }

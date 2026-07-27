@@ -111,15 +111,16 @@ impl Editable {
 
 /// Every setting a picker can offer, in the order they are shown.
 ///
-/// `models` is supplied by the caller because the valid values are whatever the
-/// provider registry resolved — config cannot know them, and a model list that
-/// went stale here would offer choices that fail on selection.
+/// `models` and `themes` are supplied by the caller because the valid values are
+/// whatever the provider registry resolved and whatever theme files were
+/// discovered — config cannot know either, and a list that went stale here would
+/// offer choices that fail on selection.
 ///
 /// Deliberately absent: `permissions`, whose rules are free text and whose
 /// broad grants should cost a deliberate file edit rather than one keystroke
 /// (see `Policy::evaluate`), and any setting nothing reads yet — offering a
 /// switch that does nothing is worse than not offering it.
-pub fn catalogue(models: &[String]) -> Vec<Editable> {
+pub fn catalogue(models: &[String], themes: &[String]) -> Vec<Editable> {
     let mut all = Vec::new();
 
     if !models.is_empty() {
@@ -196,6 +197,23 @@ pub fn catalogue(models: &[String]) -> Vec<Editable> {
             Choice::boolean(false, "false", "Box drawing and geometric shapes"),
         ],
     });
+
+    if !themes.is_empty() {
+        all.push(Editable {
+            key: "theme",
+            label: "theme",
+            detail: "Colour scheme",
+            applies: Applies::Live,
+            default: Some(Value::Text(String::from("octane"))),
+            // No detail per row: a scheme's name is what people recognise it
+            // by, and a sentence describing a palette in words is noise beside
+            // the thing itself.
+            choices: themes
+                .iter()
+                .map(|name| Choice::new(Value::text(name), name, ""))
+                .collect(),
+        });
+    }
 
     all.push(Editable {
         key: "sandbox",
@@ -293,6 +311,7 @@ pub fn current(settings: &Settings, key: &str) -> Option<String> {
         "thinking" => settings.thinking.map(|thinking| thinking.label()),
         "show-reasoning" => settings.show_reasoning.map(|value| value.to_string()),
         "ascii" => settings.ascii.map(|value| value.to_string()),
+        "theme" => settings.theme.clone(),
         "sandbox" => settings.sandbox.map(|value| value.to_string()),
         "sandbox-network" => settings.sandbox_network.map(|value| value.to_string()),
         _ => None,
@@ -418,7 +437,8 @@ mod tests {
         let (_dir, root) = temp();
         let path = root.join(SETTINGS_FILE);
 
-        for editable in catalogue(&["openrouter/flash".to_string()]) {
+        let themes = ["octane".to_string(), "nord".to_string(), "mine".to_string()];
+        for editable in catalogue(&["openrouter/flash".to_string()], &themes) {
             for choice in &editable.choices {
                 std::fs::write(&path, "").unwrap();
                 set(&path, editable.key, &choice.value).unwrap();

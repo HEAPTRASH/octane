@@ -31,6 +31,19 @@ pub fn image_kind(path: &camino::Utf8Path) -> Option<&'static str> {
     })
 }
 
+/// Cut a line to `max` characters, marking that it was cut.
+///
+/// Counted in characters, not bytes, so the cut never lands mid-codepoint. The
+/// callers pick their own cap: a matching line in a search can be shorter than a
+/// line of a file the model asked to read.
+pub fn clip_line(line: &str, max: usize) -> String {
+    if line.chars().count() <= max {
+        return line.to_string();
+    }
+    let cut: String = line.chars().take(max).collect();
+    format!("{cut}… [line truncated]")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

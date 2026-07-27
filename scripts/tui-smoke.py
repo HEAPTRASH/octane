@@ -38,6 +38,9 @@ def main() -> int:
         os.environ["TERM"] = "xterm-256color"
         os.environ["COLORTERM"] = "truecolor"
         os.environ["LANG"] = "en_US.UTF-8"
+        # This test explicitly verifies the true-colour tier. Do not let the
+        # invoking shell's accessibility preference silently switch tiers.
+        os.environ.pop("NO_COLOR", None)
         # Deliberately NOT disabling motion here. This script is the only
         # thing that measures whether a transient effect settles, and a test
         # that switches off the feature it polices proves nothing. The sweep it
@@ -104,7 +107,11 @@ def main() -> int:
     # Newline fallbacks, neither of which needs terminal support.
     send(b"\x1b\r")  # alt+enter
     pump(0.5)
-    send(b"\x15")  # ctrl+u, clear
+    # ctrl+u kills to the start of the line (readline), so this clears the
+    # single-line draft the steps above typed. It stopped being a whole-buffer
+    # clear when the editing chords landed; the comment said otherwise for a
+    # while, which is how a smoke step quietly stops testing what it names.
+    send(b"\x15")  # ctrl+u, kill to line start
     pump(0.5)
 
     # Motion must SETTLE, not merely be absent. A state change should produce
@@ -137,19 +144,21 @@ def main() -> int:
     if "\x1b[?1049h" not in raw:
         failures.append("did not enter the alternate screen")
 
-    if "38;2;149;214;0" in raw:
-        print("ok    acid green #95D600")
+    # The industrial redesign uses acid as both foreground type and a full
+    # signal-strip background; either escape proves the exact brand value made
+    # it to the terminal.
+    if any(sequence in raw for sequence in ("38;2;184;245;0", "48;2;184;245;0")):
+        print("ok    acid green #B8F500")
     else:
         failures.append("brand colour missing from output")
 
     for label, needle in {
         "wordmark": "\u2588",
         "@ completion": "rust-toolchain.toml",
-        "claw mark": "\u2571\u2571\u2571",
-        "hints": "shift+tab",
+        "hints": "SHIFT+TAB",
         "shell output": "tui-smoke-ok",
-        "mode cycled": "accept-edits",
-        "status line": "ctx 0%",
+        "mode cycled": "ACCEPT-EDITS",
+        "status line": "CTX/100% LEFT",
     }.items():
         if needle in plain:
             print(f"ok    {label}")

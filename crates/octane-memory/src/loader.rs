@@ -109,7 +109,7 @@ fn load_file(
 
     let base_dir = path.parent().unwrap_or(root).to_owned();
     let mut imported = Vec::new();
-    let content = resolve_imports(&raw, &base_dir, root, &mut imported)?;
+    let content = resolve_imports(&raw, &base_dir, root, &mut imported);
 
     Ok(Some(MemoryFile {
         origin: Origin { layer, path: path.to_owned() },

@@ -1,0 +1,56 @@
+octane
+Copyright 2026 the octane authors
+
+This product includes software derived from OpenAI Codex
+(https://github.com/openai/codex), Copyright 2025 OpenAI, licensed under the
+Apache License, Version 2.0. A copy of that license is in LICENSE-APACHE.
+
+Files containing derived code carry a header saying so and describing what was
+changed, as Apache-2.0 section 4(b) requires. At the time of writing:
+
+  crates/octane-sandbox/src/bwrap.rs
+      The bubblewrap mount ordering and flag recipe — the order in which
+      `--ro-bind`, `--tmpfs`, `--dev`, `--bind` and the `--unshare-*` flags must
+      be applied for the resulting confinement to be correct — is derived from
+      codex-rs/linux-sandbox/src/bwrap.rs. The code is a reimplementation
+      against octane's own `SandboxPolicy`, not a copy.
+
+  crates/octane-session/src/lib.rs
+      The on-disk shape — an append-only JSONL file per session whose first
+      line is metadata and whose remaining lines are conversation items, so a
+      session killed mid-write stays readable up to its last complete line — is
+      taken from codex-rs/rollout/src/recorder.rs. No code was copied; octane
+      records its own `Message` type and has no index, database, or archive
+      tier.
+
+  crates/octane-tui/src/render.rs
+      The shape of the diff renderer — a right-aligned line-number column, a
+      coloured sign column beside syntax-highlighted content, the language
+      inferred from the `+++ b/<path>` header's extension, the lexer restarted
+      per hunk rather than carried across one, and a dim overlay marking the
+      removed side — is derived from codex-rs/tui/src/diff_render.rs. No code
+      was copied; octane highlights through its own `Highlighter` and palette,
+      and dims removals where codex tints their background.
+
+  crates/octane-tui/src/composer.rs
+      The word-boundary rule for the composer's word motions and word deletions
+      — the `WORD_SEPARATORS` set, and the rule that a run of those separators
+      forms a word of its own so that deleting through `foo::bar()` removes
+      `()`, then `bar`, then `::` — is derived from
+      codex-rs/tui/src/bottom_pane/textarea.rs (`is_word_separator`,
+      `split_word_pieces`). No code was copied: octane classifies characters
+      directly rather than splitting on UAX #29 word bounds, so it carries no
+      dependency on `unicode-segmentation`.
+
+  crates/octane-tui/src/markdown.rs
+      The way a pipe table is presented — cells padded to a measured column
+      width, columns separated by a two-space gutter rather than drawn borders,
+      the delimiter row becoming a rule under the header, and the last column
+      left unpadded — is derived from codex-rs/tui/src/markdown_render.rs. No
+      code was copied, and codex's width-allocation machinery (column
+      classification, iterative shrinking, key/value fallback) is deliberately
+      not taken: octane's renderer is not given a viewport width, so columns
+      keep their natural width and the transcript wraps an over-wide table like
+      any other long line.
+
+The rest of octane is MIT licensed; see LICENSE-MIT.

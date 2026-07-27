@@ -45,6 +45,15 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ascii: Option<bool>,
 
+    /// Colour scheme: a built-in name, or the stem of a `themes/*.json` file.
+    ///
+    /// A name rather than an inline palette. The set of valid names is not
+    /// knowable here — it depends on what was discovered on disk — so resolving
+    /// it is the client's job, and an unresolvable name is reported at startup
+    /// rather than silently falling back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+
     #[serde(default, skip_serializing_if = "Permissions::is_empty")]
     pub permissions: Permissions,
 }
@@ -125,6 +134,7 @@ impl Settings {
             sandbox,
             sandbox_network,
             ascii,
+            theme,
         );
 
         // Rules accumulate rather than replace: a project adding one deny should
@@ -156,6 +166,7 @@ pub const TEMPLATE: &str = r#"# octane settings. Project settings override ~/.oc
 # sandbox      = true                 # OS containment for shell commands
 # sandbox-network = false
 # ascii        = false                # force the ASCII glyph set
+# theme        = "octane"             # a built-in, or a `themes/<name>.json` stem
 
 # [permissions]
 # allow = ["command(git status)", "command(cargo test)"]

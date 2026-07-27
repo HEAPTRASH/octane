@@ -13,8 +13,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::api::ApiType;
-use crate::config::{Auth, ConfigError, Defaults, ModelEntry, ProviderConfig, ResolvedModel, Role};
+use crate::config::{Auth, ConfigError, ProviderConfig, ResolvedModel, Role};
 
 /// Directory searched under each config root.
 pub const PROVIDERS_DIR: &str = "providers";
@@ -220,157 +219,24 @@ impl Registry {
 /// Deliberately small. This is a convenience for the common case, not a registry
 /// to maintain — a catalogue of every provider and model goes stale the moment it
 /// ships, which is what models.dev exists to solve.
+///
+/// Built from the same recipes `octane connect` writes to a file, because these
+/// were two hand-written copies of one table and had already drifted: the
+/// built-in `openai` spoke the Completions API while `octane connect openai`
+/// wrote Responses, so the same key behaved differently depending on whether a
+/// file existed. One table cannot disagree with itself.
+///
+/// Responses is the side that won, deliberately: it is what `connect` already
+/// wrote, and it is OpenAI's current API. A zero-config `OPENAI_API_KEY` session
+/// therefore changed endpoint here — the alternative was leaving two answers to
+/// one question. Ollama gained a `defaults` block in the same move; it was the
+/// one built-in that named no primary model, so `--model ollama` resolved nothing.
 fn builtin_providers() -> BTreeMap<String, ProviderConfig> {
-    let mut providers = BTreeMap::new();
-
-    providers.insert(
-        "anthropic".to_string(),
-        ProviderConfig {
-            name: Some("Anthropic".into()),
-            api: Some(ApiType::Anthropic),
-            base_url: Some("https://api.anthropic.com/v1".into()),
-            auth: Auth::anthropic_key("${ANTHROPIC_API_KEY}"),
-            headers: [("anthropic-version".to_string(), "2023-06-01".to_string())]
-                .into_iter()
-                .collect(),
-            defaults: Defaults {
-                primary: Some("sonnet".into()),
-                faster: Some("haiku".into()),
-            },
-            models: [
-                (
-                    "sonnet".to_string(),
-                    ModelEntry {
-                        id: "claude-sonnet-4-5".into(),
-                        name: Some("Claude Sonnet 4.5".into()),
-                        context_window: Some(200_000),
-                        max_output: Some(64_000),
-                        reasoning: Some(true),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "haiku".to_string(),
-                    ModelEntry {
-                        id: "claude-haiku-4-5".into(),
-                        name: Some("Claude Haiku 4.5".into()),
-                        context_window: Some(200_000),
-                        max_output: Some(32_000),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        },
-    );
-
-    providers.insert(
-        "openai".to_string(),
-        ProviderConfig {
-            name: Some("OpenAI".into()),
-            api: Some(ApiType::OpenAiCompletion),
-            base_url: Some("https://api.openai.com/v1".into()),
-            auth: Auth::bearer("${OPENAI_API_KEY}"),
-            defaults: Defaults { primary: Some("gpt".into()), faster: Some("mini".into()) },
-            models: [
-                (
-                    "gpt".to_string(),
-                    ModelEntry {
-                        id: "gpt-5".into(),
-                        name: Some("GPT-5".into()),
-                        context_window: Some(400_000),
-                        max_output: Some(128_000),
-                        reasoning: Some(true),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "mini".to_string(),
-                    ModelEntry {
-                        id: "gpt-5-mini".into(),
-                        name: Some("GPT-5 mini".into()),
-                        context_window: Some(400_000),
-                        max_output: Some(128_000),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        },
-    );
-
-    providers.insert(
-        "gemini".to_string(),
-        ProviderConfig {
-            name: Some("Google Gemini".into()),
-            api: Some(ApiType::Google),
-            base_url: Some("https://generativelanguage.googleapis.com/v1beta".into()),
-            auth: Auth::gemini_key("${GEMINI_API_KEY}"),
-            defaults: Defaults { primary: Some("pro".into()), faster: Some("flash".into()) },
-            models: [
-                (
-                    "pro".to_string(),
-                    ModelEntry {
-                        id: "gemini-3-pro".into(),
-                        name: Some("Gemini 3 Pro".into()),
-                        context_window: Some(1_000_000),
-                        max_output: Some(64_000),
-                        reasoning: Some(true),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    "flash".to_string(),
-                    ModelEntry {
-                        id: "gemini-3-flash".into(),
-                        name: Some("Gemini 3 Flash".into()),
-                        context_window: Some(1_000_000),
-                        max_output: Some(64_000),
-                        images: Some(true),
-                        ..Default::default()
-                    },
-                ),
-            ]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        },
-    );
-
-    providers.insert(
-        "ollama".to_string(),
-        ProviderConfig {
-            name: Some("Ollama".into()),
-            api: Some(ApiType::OpenAiCompletion),
-            base_url: Some("http://localhost:11434/v1".into()),
-            // Local, so no key — and therefore always "available", which is the
-            // right answer: whether it responds is a different question.
-            auth: Auth::None,
-            models: [(
-                "qwen".to_string(),
-                ModelEntry {
-                    id: "qwen3-coder:latest".into(),
-                    name: Some("Qwen3 Coder (local)".into()),
-                    context_window: Some(256_000),
-                    ..Default::default()
-                },
-            )]
-            .into_iter()
-            .collect(),
-            ..Default::default()
-        },
-    );
-
-    providers
+    ["anthropic", "openai", "gemini", "ollama"]
+        .into_iter()
+        .filter_map(crate::connect::recipe)
+        .map(|recipe| (recipe.key.to_string(), crate::connect::build_config(&recipe)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -399,6 +265,29 @@ mod tests {
         let registry = Registry::builtin();
         for expected in ["anthropic", "openai", "gemini", "ollama"] {
             assert!(registry.get(expected).is_some(), "missing {expected}");
+        }
+    }
+
+    /// A built-in provider and the file `octane connect` writes for it are the
+    /// same provider, so they must be the same configuration. Held apart, they
+    /// drifted: the built-in `openai` spoke Completions while connect wrote
+    /// Responses, and the API a key reached depended on whether a file existed.
+    #[test]
+    fn a_builtin_provider_matches_what_connect_would_write_for_it() {
+        let registry = Registry::builtin();
+        for (key, builtin) in &registry.providers {
+            let recipe = crate::connect::recipe(key).expect("builtin has a connect recipe");
+            assert_eq!(&crate::connect::build_config(&recipe), builtin, "{key} drifted");
+        }
+    }
+
+    /// Every built-in names a primary. Ollama's had no `defaults` while the
+    /// other three did, so it was the one built-in that named no model to use.
+    #[test]
+    fn every_builtin_names_a_primary_model() {
+        for (key, config) in &Registry::builtin().providers {
+            let primary = config.defaults.primary.as_deref().unwrap_or_default();
+            assert!(config.models.contains_key(primary), "{key} names no primary model");
         }
     }
 

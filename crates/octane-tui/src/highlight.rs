@@ -26,6 +26,23 @@ use syntect::parsing::{ParseState, ScopeStack, SyntaxSet};
 
 use crate::theme::{ColorDepth, Theme};
 
+/// Tags models write that no grammar answers to.
+fn alias(token: &str) -> Option<&'static str> {
+    Some(match token.to_ascii_lowercase().as_str() {
+        "shell" | "zsh" | "console" | "shell-session" => "bash",
+        "yaml" => "yml",
+        "docker" | "dockerfile" => "Dockerfile",
+        "objective-c" | "objc" => "m",
+        "c++" | "cpp" => "cc",
+        "c#" | "csharp" => "cs",
+        "golang" => "go",
+        "rs" | "rust" => "rust",
+        "markdown" => "md",
+        "text" | "plain" | "plaintext" => return None,
+        _ => return None,
+    })
+}
+
 fn syntaxes() -> &'static SyntaxSet {
     // Loaded once. Decompressing the bundle is a few milliseconds and would
     // otherwise be paid per code block.
@@ -52,17 +69,40 @@ impl Highlighter {
     /// Returning `None` rather than a no-op highlighter keeps the caller on its
     /// existing plain path, which is the one that is already tested.
     pub fn new(language: &str, theme: &Theme) -> Option<Self> {
+        Self::detect(language, "", theme)
+    }
+
+    /// Resolve a grammar from a fence's language tag, falling back to the code
+    /// itself when the tag is missing or unknown.
+    ///
+    /// Three attempts, narrowing trust as they go:
+    ///
+    /// 1. The tag, as a token or an extension — `rust`, `rs`, `py`.
+    /// 2. A small alias table, because models write `shell` and `yaml` where
+    ///    the grammars are named `bash` and `yml`, and an untagged-looking
+    ///    block that was in fact tagged is the most annoying way to lose
+    ///    highlighting.
+    /// 3. `first_line`, which is syntect's own detection: each grammar may
+    ///    declare a `first_line_match` regex, so a shebang, `<?php` or a
+    ///    doctype identifies itself. This is deliberately the *only* content
+    ///    sniffing done — guessing a language from arbitrary code and getting
+    ///    it wrong renders the block as garbage, which is worse than leaving
+    ///    it plain.
+    pub fn detect(language: &str, first_line: &str, theme: &Theme) -> Option<Self> {
         if theme.depth == ColorDepth::None {
             return None;
         }
         let set = syntaxes();
         let token = language.trim();
-        if token.is_empty() {
-            return None;
-        }
+
         let syntax = set
             .find_syntax_by_token(token)
-            .or_else(|| set.find_syntax_by_extension(token))?;
+            .or_else(|| set.find_syntax_by_extension(token))
+            .or_else(|| alias(token).and_then(|name| set.find_syntax_by_token(name)))
+            .or_else(|| {
+                let probe = first_line.trim_end();
+                (!probe.is_empty()).then(|| set.find_syntax_by_first_line(probe)).flatten()
+            })?;
         Some(Self { state: ParseState::new(syntax), stack: ScopeStack::new() })
     }
 
@@ -125,32 +165,22 @@ impl Highlighter {
 fn colour_for(scope: &str, theme: &Theme) -> ratatui::style::Color {
     // Longest-prefix first: `constant.numeric` must not be caught by a rule
     // for `constant` if both are listed.
-    const TABLE: &[(&str, u8)] = &[
-        ("comment", 0),
-        ("string", 1),
-        ("constant", 2),
-        ("keyword", 3),
-        ("storage", 3),
-        ("entity.name.function", 4),
-        ("support.function", 4),
-        ("entity.name", 5),
-        ("support.type", 5),
-        ("support.class", 5),
-        ("variable", 6),
-        ("punctuation", 0),
-    ];
-
-    for (prefix, slot) in TABLE {
+    for (prefix, colour) in [
+        ("comment", theme.dim),
+        ("string", theme.success),
+        ("constant", theme.warning),
+        ("keyword", theme.accent),
+        ("storage", theme.accent),
+        ("entity.name.function", theme.tool),
+        ("support.function", theme.tool),
+        ("entity.name", theme.assistant),
+        ("support.type", theme.assistant),
+        ("support.class", theme.assistant),
+        ("variable", theme.code),
+        ("punctuation", theme.dim),
+    ] {
         if scope.starts_with(prefix) {
-            return match slot {
-                0 => theme.dim,
-                1 => theme.success,
-                2 => theme.warning,
-                3 => theme.accent,
-                4 => theme.tool,
-                5 => theme.assistant,
-                _ => theme.code,
-            };
+            return colour;
         }
     }
     theme.code

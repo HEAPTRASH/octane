@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
 use crate::loop_guard::LoopGuard;
-use crate::step::{DEFAULT_STEP_LIMIT, StepDecision, StopReason};
+use crate::step::{DEFAULT_STEP_LIMIT, StopReason};
 
 /// Successful compactions allowed in one turn.
 ///
@@ -44,8 +44,35 @@ const MAX_COMPACTIONS_PER_TURN: u32 = 2;
 pub trait Approver: Send + Sync {
     /// Ask about `resource`. `preview` carries a diff for edits.
     ///
-    /// Returning `false` ends the turn — see [`StopReason::Denied`].
-    async fn request(&self, resource: &Resource, preview: Option<&str>) -> bool;
+    /// A [`Verdict::Denied`] ends the turn — see [`StopReason::Denied`].
+    async fn request(&self, resource: &Resource, preview: Option<&str>) -> Verdict;
+}
+
+/// What the user said.
+///
+/// Carries the redirect, when there is one. It used to be a bare `bool`, so a
+/// user who took up the prompt's offer to "type instructions" had them
+/// collected by the UI, flattened to `false` here, and silently dropped — the
+/// affordance was advertised on every prompt and wired to nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    Approved,
+    Denied {
+        /// What to do instead, when the user said.
+        ///
+        /// This does *not* get handed back to the model mid-turn: a denial
+        /// still ends the turn, or the model would be invited to reason around
+        /// a refusal it just received. It comes back in [`TurnOutcome`] so the
+        /// caller can open the next turn with it, which is the same words
+        /// arriving as a fresh instruction rather than as a rebuttal.
+        instructions: Option<String>,
+    },
+}
+
+impl Verdict {
+    pub fn is_approval(&self) -> bool {
+        matches!(self, Self::Approved)
+    }
 }
 
 /// One inference step's worth of model output, already normalized.
@@ -99,6 +126,8 @@ pub struct TurnRunner {
     /// survive compaction untouched.
     pub preserved_prefix: usize,
     guard: LoopGuard,
+    /// What the user typed when they rejected an action, if anything.
+    redirect: Option<String>,
 }
 
 impl std::fmt::Debug for TurnRunner {
@@ -131,6 +160,10 @@ pub struct TurnOutcome {
     /// summarization on every turn that never shrinks anything. `None` means
     /// the caller's copy is still correct.
     pub history_replacement: Option<Vec<Message>>,
+    /// What the user typed when they rejected an action.
+    ///
+    /// The caller opens the next turn with it. Empty for every other outcome.
+    pub redirect: Option<String>,
 }
 
 impl TurnOutcome {
@@ -166,6 +199,7 @@ impl TurnRunner {
             summarizer: None,
             preserved_prefix: 0,
             guard: LoopGuard::default(),
+            redirect: None,
         }
     }
 
@@ -255,7 +289,7 @@ impl TurnRunner {
                     if compactions >= MAX_COMPACTIONS_PER_TURN
                         || compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT
                     {
-                        return self.finish_with_history(
+                        return self.finish(
                             StopReason::Failed {
                                 message: octane_context::ContextError::CircuitOpen {
                                     attempts: compaction_failures.max(compactions),
@@ -264,8 +298,7 @@ impl TurnRunner {
                             },
                             appended,
                             steps,
-                            history,
-                        );
+                        ).with_history(Some(history));
                     }
 
                     let plan = match octane_context::compact::plan(
@@ -275,12 +308,11 @@ impl TurnRunner {
                     ) {
                         Ok(plan) => plan,
                         Err(error) => {
-                            return self.finish_with_history(
+                            return self.finish(
                                 StopReason::Failed { message: error.to_string() },
                                 appended,
                                 steps,
-                                history,
-                            );
+                            ).with_history(Some(history));
                         }
                     };
 
@@ -289,12 +321,11 @@ impl TurnRunner {
                         Err(error) => {
                             compaction_failures += 1;
                             if compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT {
-                                return self.finish_with_history(
+                                return self.finish(
                                     StopReason::Failed { message: error.to_string() },
                                     appended,
                                     steps,
-                                    history,
-                                );
+                                ).with_history(Some(history));
                             }
                             continue;
                         }
@@ -312,20 +343,12 @@ impl TurnRunner {
                     let candidate = octane_context::compact::apply(&history, &plan, &summary);
                     let after = octane_context::prune::estimate_tokens(&candidate);
                     if after >= used {
+                        // No separate circuit breaker here: the candidate is
+                        // discarded, so the next pass recomputes the same
+                        // pressure, lands back in this arm, and the loop head's
+                        // breaker opens with the same CircuitOpen message. One
+                        // wasted token walk buys one copy of the stop rule.
                         compaction_failures += 1;
-                        if compaction_failures >= octane_context::COMPACTION_FAILURE_LIMIT {
-                            return self.finish_with_history(
-                                StopReason::Failed {
-                                    message: octane_context::ContextError::CircuitOpen {
-                                        attempts: compaction_failures,
-                                    }
-                                    .to_string(),
-                                },
-                                appended,
-                                steps,
-                                history,
-                            );
-                        }
                         continue;
                     }
 
@@ -518,8 +541,15 @@ impl TurnRunner {
                 Decision::Allow => {}
                 Decision::Deny => return Err(ToolError::Denied(parsed.to_string())),
                 Decision::Ask => {
-                    if !self.approver.request(&parsed, None).await {
-                        return Err(ToolError::Denied(parsed.to_string()));
+                    match self.approver.request(&parsed, None).await {
+                        Verdict::Approved => {}
+                        Verdict::Denied { instructions } => {
+                            // Kept on the runner rather than threaded through
+                            // the error: `ToolError::Denied` is matched in
+                            // several places and only the turn's end cares.
+                            self.redirect = instructions;
+                            return Err(ToolError::Denied(parsed.to_string()));
+                        }
                     }
                     // Remember it, so the same question is not asked again.
                     let _ = self.policy.grant_for_session(&parsed);
@@ -531,39 +561,13 @@ impl TurnRunner {
     }
 
     fn finish(&self, reason: StopReason, messages: Vec<Message>, steps: u32) -> TurnOutcome {
-        TurnOutcome { stop_reason: reason, messages, steps_taken: steps, history_replacement: None }
-    }
-
-    fn finish_with_history(
-        &self,
-        reason: StopReason,
-        messages: Vec<Message>,
-        steps: u32,
-        history: Vec<Message>,
-    ) -> TurnOutcome {
         TurnOutcome {
             stop_reason: reason,
             messages,
             steps_taken: steps,
-            history_replacement: Some(history),
+            history_replacement: None,
+            redirect: self.redirect.clone(),
         }
-    }
-
-    /// Decide what to do after a step. Exposed for testing the rails in isolation.
-    pub fn evaluate(&self, steps: u32, wants_tools: bool) -> StepDecision {
-        if self.cancel.is_cancelled() {
-            return StepDecision::Stop(StopReason::Interrupted);
-        }
-        if steps >= self.step_limit {
-            return StepDecision::Stop(StopReason::StepLimit { limit: self.step_limit });
-        }
-        if let Some((signature, repeats)) = self.guard.detect() {
-            return StepDecision::Stop(StopReason::LoopDetected { signature, repeats });
-        }
-        if !wants_tools {
-            return StepDecision::Stop(StopReason::Completed);
-        }
-        StepDecision::Continue
     }
 }
 
@@ -619,16 +623,26 @@ mod tests {
     struct AlwaysApprove;
     #[async_trait]
     impl Approver for AlwaysApprove {
-        async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> bool {
-            true
+        async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> Verdict {
+            Verdict::Approved
+        }
+    }
+
+    struct DenyWithInstructions;
+
+    #[async_trait]
+    impl Approver for DenyWithInstructions {
+        async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> Verdict {
+            Verdict::Denied { instructions: Some("use the other crate".into()) }
         }
     }
 
     struct AlwaysDeny;
+
     #[async_trait]
     impl Approver for AlwaysDeny {
-        async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> bool {
-            false
+        async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> Verdict {
+            Verdict::Denied { instructions: None }
         }
     }
 
@@ -741,6 +755,39 @@ mod tests {
             .count();
         assert_eq!(calls, 1);
         assert_eq!(results, 1);
+    }
+
+    /// The prompt offers "or type instructions". Those words used to be
+    /// collected by the UI and then flattened into a bare `false` at this
+    /// trait, so the offer was advertised on every prompt and wired to nothing.
+    #[tokio::test]
+    async fn a_rejection_carries_the_users_instructions_back_out() {
+        let policy = Policy::builder().ask("command(*)", Scope::User).build().0;
+        let mut runner = runner(Arc::new(DenyWithInstructions), policy);
+        let source = ScriptedSource::new(vec![
+            tool_step("echo", "{\"text\":\"hi\"}"),
+            final_answer("should never be reached"),
+        ]);
+
+        let outcome = runner.run(&source, Vec::new(), "/p".into(), "/p".into()).await;
+
+        assert_eq!(outcome.redirect.as_deref(), Some("use the other crate"));
+        // And the invariant still holds: the denial ended the turn rather than
+        // handing the model a refusal to reason around. The instructions reach
+        // it as a fresh message on the *next* turn, which the caller opens.
+        assert!(matches!(outcome.stop_reason, StopReason::Denied { .. }));
+        assert_eq!(source.calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A plain rejection carries nothing, so the caller starts no new turn.
+    #[tokio::test]
+    async fn a_plain_rejection_asks_for_nothing() {
+        let policy = Policy::builder().ask("command(*)", Scope::User).build().0;
+        let mut runner = runner(Arc::new(AlwaysDeny), policy);
+        let source = ScriptedSource::new(vec![tool_step("echo", "{\"text\":\"hi\"}")]);
+
+        let outcome = runner.run(&source, Vec::new(), "/p".into(), "/p".into()).await;
+        assert_eq!(outcome.redirect, None);
     }
 
     #[tokio::test]
@@ -864,9 +911,9 @@ mod tests {
         struct CountingApprover(AtomicUsize);
         #[async_trait]
         impl Approver for CountingApprover {
-            async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> bool {
+            async fn request(&self, _resource: &Resource, _preview: Option<&str>) -> Verdict {
                 self.0.fetch_add(1, Ordering::SeqCst);
-                true
+                Verdict::Approved
             }
         }
 

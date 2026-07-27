@@ -13,7 +13,9 @@
 //! - `skill` output, because it carries project rules and losing it mid-session
 //!   degrades quality in a way that looks like the model got worse
 
-use octane_protocol::{Message, Part};
+use std::collections::HashSet;
+
+use octane_protocol::{Message, Part, ToolResult};
 
 /// Tools whose output survives pruning.
 ///
@@ -67,17 +69,20 @@ pub fn reclaimable_tokens(messages: &[Message], protect_tokens: usize) -> usize 
         .iter()
         .flat_map(|message| &message.parts)
         .filter_map(|part| match part {
-            Part::ToolResult(result)
-                if !result.output.is_empty()
-                    && result.output != CLEARED
-                    && !protected.contains(&result.call_id) =>
-            {
-                Some(result.output.len())
-            }
+            Part::ToolResult(result) if prunable(result, &protected) => Some(result.output.len()),
             _ => None,
         })
         .sum::<usize>()
         .div_ceil(4)
+}
+
+/// Whether this tool result's output is one `prune` would clear.
+///
+/// The one place the test lives, so the estimate and the prune cannot disagree.
+fn prunable(result: &ToolResult, protected: &HashSet<octane_protocol::ToolCallId>) -> bool {
+    !result.output.is_empty()
+        && result.output != CLEARED
+        && !protected.contains(&result.call_id)
 }
 
 /// Clear prunable tool outputs before the protection window.
@@ -104,11 +109,7 @@ pub fn prune(messages: Vec<Message>, protect_tokens: usize, minimum: usize) -> P
         // what an instruction is, are never touched.
         for part in &mut message.parts {
             let Part::ToolResult(result) = part else { continue };
-
-            if result.output.is_empty() || result.output == CLEARED {
-                continue;
-            }
-            if protected_calls.contains(&result.call_id) {
+            if !prunable(result, &protected_calls) {
                 continue;
             }
 
@@ -141,7 +142,7 @@ fn protection_cutoff(messages: &[Message], protect_tokens: usize) -> usize {
 }
 
 /// Call ids whose output is exempt from pruning.
-fn protected_call_ids(messages: &[Message]) -> std::collections::HashSet<octane_protocol::ToolCallId> {
+fn protected_call_ids(messages: &[Message]) -> HashSet<octane_protocol::ToolCallId> {
     messages
         .iter()
         .flat_map(|message| &message.parts)

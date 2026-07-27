@@ -57,16 +57,6 @@ impl StopReason {
     }
 }
 
-/// What the loop should do after a step.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StepDecision {
-    /// Run another inference step.
-    Continue,
-    /// Reduce context, then continue. Not a stop: the turn is still live.
-    CompactThenContinue,
-    Stop(StopReason),
-}
-
 /// Default step cap.
 ///
 /// High enough never to interrupt legitimate work — long refactors genuinely take
