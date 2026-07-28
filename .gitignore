@@ -20,6 +20,9 @@
 # research cache (Firecrawl scrapes)
 /.firecrawl/
 
+# Local presentation source and generated deck
+/pitch-deck/
+
 # macOS
 .DS_Store
 

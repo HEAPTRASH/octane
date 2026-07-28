@@ -153,7 +153,7 @@ def main() -> int:
         failures.append("brand colour missing from output")
 
     for label, needle in {
-        "wordmark": "\u2588",
+        "brand mark": "\u2588\u2588\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2588 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588",
         "@ completion": "rust-toolchain.toml",
         "hints": "SHIFT+TAB",
         "shell output": "tui-smoke-ok",

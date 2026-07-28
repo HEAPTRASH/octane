@@ -1,114 +1,136 @@
-// Octane Interactive Website Functionality
-document.addEventListener('DOMContentLoaded', () => {
-  
-  // 1. Interactive Tabs Mechanism
-  const tabBtns = document.querySelectorAll('.tab-btn');
-  const tabContents = document.querySelectorAll('.tab-content');
+(() => {
+  "use strict";
 
-  tabBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const targetTab = btn.getAttribute('data-tab');
+  const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const root = document.documentElement;
 
-      // Update active state on buttons
-      tabBtns.forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
+  // Short mechanical boot transition. The page remains usable if JavaScript is disabled.
+  const boot = document.querySelector(".boot-screen");
+  const bootCount = document.querySelector(".boot-count");
+  if (boot && !reducedMotion) {
+    let frame = 0;
+    const bootTimer = window.setInterval(() => {
+      frame = Math.min(frame + Math.ceil((100 - frame) * 0.24), 100);
+      if (bootCount) bootCount.textContent = String(frame).padStart(2, "0");
+      if (frame >= 100) {
+        window.clearInterval(bootTimer);
+        boot.classList.add("is-done");
+      }
+    }, 32);
+  } else {
+    boot?.classList.add("is-done");
+  }
 
-      // Update active state on contents
-      tabContents.forEach(content => {
-        content.classList.remove('active');
-        if (content.id === `tab-${targetTab}`) {
-          content.classList.add('active');
-        }
-      });
-    });
-  });
-
-  // 2. Clipboard Copy Functionality with Visual Feedback
-  const copyBtns = document.querySelectorAll('.copy-btn');
-  copyBtns.forEach(btn => {
-    btn.addEventListener('click', () => {
-      const textToCopy = btn.getAttribute('data-copy');
-      if (textToCopy) {
-        navigator.clipboard.writeText(textToCopy).then(() => {
-          const labelSpan = btn.querySelector('.copy-label');
-          const originalText = labelSpan ? labelSpan.textContent : btn.textContent;
-          
-          if (labelSpan) {
-            labelSpan.textContent = 'Copied!';
-          } else {
-            btn.textContent = 'Copied!';
-          }
-
-          btn.style.borderColor = 'rgba(48, 209, 88, 0.6)';
-          btn.style.color = '#30d158';
-
-          setTimeout(() => {
-            if (labelSpan) {
-              labelSpan.textContent = originalText;
-            } else {
-              btn.textContent = originalText;
-            }
-            btn.style.borderColor = '';
-            btn.style.color = '';
-          }, 2000);
-        }).catch(err => {
-          console.error('Failed to copy text:', err);
+  // Reveal content when it reaches the working area.
+  const revealItems = [...document.querySelectorAll(".reveal")];
+  if ("IntersectionObserver" in window && !reducedMotion) {
+    const revealObserver = new IntersectionObserver(
+      (entries, observer) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
         });
-      }
+      },
+      { threshold: 0.12, rootMargin: "0px 0px -6% 0px" }
+    );
+    revealItems.forEach((item) => revealObserver.observe(item));
+  } else {
+    revealItems.forEach((item) => item.classList.add("is-visible"));
+  }
+
+  // Oversized words drift sideways with scroll, preserving the industrial marquee feel.
+  const driftItems = [...document.querySelectorAll("[data-drift]")];
+  let driftFrame = null;
+  const updateDrift = () => {
+    const scrollY = window.scrollY;
+    driftItems.forEach((item) => {
+      const speed = Number.parseFloat(item.dataset.drift || "0");
+      item.style.transform = `translate3d(${scrollY * speed}px, 0, 0)`;
     });
-  });
+    driftFrame = null;
+  };
 
-  // 3. Smooth Scroll Navbar Shadow on Scroll
-  const navbar = document.getElementById('navbar');
-  window.addEventListener('scroll', () => {
-    if (window.scrollY > 20) {
-      navbar.style.borderBottomColor = 'rgba(255, 255, 255, 0.15)';
-      navbar.style.boxShadow = '0 10px 30px rgba(0, 0, 0, 0.8)';
-    } else {
-      navbar.style.borderBottomColor = 'rgba(255, 255, 255, 0.08)';
-      navbar.style.boxShadow = 'none';
-    }
-  });
+  if (!reducedMotion && driftItems.length) {
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (driftFrame === null) driftFrame = window.requestAnimationFrame(updateDrift);
+      },
+      { passive: true }
+    );
+    updateDrift();
+  }
 
-  // 4. Scroll Reveal Intersection Observer
-  const revealElements = document.querySelectorAll('.reveal-on-scroll');
-  const revealObserver = new IntersectionObserver((entries, observer) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        entry.target.classList.add('revealed');
-        observer.unobserve(entry.target);
-      }
+  // The app capture reacts as a physical panel, not as a fake UI.
+  const tiltPanel = document.querySelector("[data-tilt]");
+  if (tiltPanel && !reducedMotion && window.matchMedia("(pointer: fine)").matches) {
+    tiltPanel.addEventListener("pointermove", (event) => {
+      const rect = tiltPanel.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width - 0.5;
+      const y = (event.clientY - rect.top) / rect.height - 0.5;
+      tiltPanel.style.transform = `perspective(1400px) rotateX(${-y * 2.4}deg) rotateY(${x * 2.4}deg)`;
     });
-  }, {
-    root: null,
-    threshold: 0.1,
-    rootMargin: '0px 0px -40px 0px'
-  });
-
-  revealElements.forEach(el => revealObserver.observe(el));
-
-  // 5. Hero 3D Interactive Mouse Tilt
-  const heroWrapper = document.querySelector('.hero-visual-wrapper');
-  const macWindow = document.querySelector('.mac-window');
-
-  if (heroWrapper && macWindow) {
-    heroWrapper.addEventListener('mousemove', (e) => {
-      const rect = heroWrapper.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
-      
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      
-      const rotateX = ((y - centerY) / centerY) * -6; // max 6 deg tilt
-      const rotateY = ((x - centerX) / centerX) * 6;  // max 6 deg tilt
-      
-      macWindow.style.transform = `rotateX(${rotateX}deg) rotateY(${rotateY}deg)`;
-    });
-
-    heroWrapper.addEventListener('mouseleave', () => {
-      macWindow.style.transform = 'rotateX(0deg) rotateY(0deg)';
+    tiltPanel.addEventListener("pointerleave", () => {
+      tiltPanel.style.transform = "";
     });
   }
 
-});
+  // Custom crosshair only appears with precise pointing devices.
+  const crosshair = document.querySelector(".crosshair");
+  if (crosshair && !reducedMotion && window.matchMedia("(pointer: fine)").matches) {
+    window.addEventListener("pointermove", (event) => {
+      crosshair.style.left = `${event.clientX}px`;
+      crosshair.style.top = `${event.clientY}px`;
+      crosshair.classList.add("is-visible");
+    });
+    document.querySelectorAll("a, button, [data-tilt]").forEach((target) => {
+      target.addEventListener("pointerenter", () => crosshair.classList.add("is-active"));
+      target.addEventListener("pointerleave", () => crosshair.classList.remove("is-active"));
+    });
+  }
+
+  // Mobile navigation.
+  const menuButton = document.querySelector(".menu-button");
+  const siteNav = document.querySelector(".site-nav");
+  const closeMenu = () => {
+    menuButton?.setAttribute("aria-expanded", "false");
+    siteNav?.classList.remove("is-open");
+    document.body.classList.remove("menu-open");
+  };
+
+  menuButton?.addEventListener("click", () => {
+    const nextOpen = menuButton.getAttribute("aria-expanded") !== "true";
+    menuButton.setAttribute("aria-expanded", String(nextOpen));
+    siteNav?.classList.toggle("is-open", nextOpen);
+    document.body.classList.toggle("menu-open", nextOpen);
+  });
+  siteNav?.querySelectorAll("a").forEach((link) => link.addEventListener("click", closeMenu));
+  window.addEventListener("resize", () => {
+    if (window.innerWidth > 1050) closeMenu();
+  });
+
+  // Copy the real local build sequence.
+  document.querySelectorAll("[data-copy]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const value = button.dataset.copy || "";
+      try {
+        await navigator.clipboard.writeText(value);
+        const original = button.textContent;
+        button.textContent = "COPIED";
+        window.setTimeout(() => {
+          button.textContent = original;
+        }, 1600);
+      } catch {
+        button.textContent = "SELECT CODE";
+      }
+    });
+  });
+
+  // Keep keyboard focus visible without forcing a ring on pointer interactions.
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeMenu();
+  });
+
+  root.classList.add("js-ready");
+})();

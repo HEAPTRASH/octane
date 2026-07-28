@@ -10,7 +10,6 @@
 //! What is left is the art and the rule for picking a size, which the empty
 //! state renders like any other widget.
 
-
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Rect};
 use ratatui::widgets::Widget;
@@ -19,28 +18,19 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-/// The full logo. 30 columns, 15 rows.
+/// The full Octane mark. 21 columns, 7 rows.
 ///
-/// Braille, which is one of the ranges declared width-safe: the whole block is
-/// East Asian Width Neutral, so every cell is one column in every terminal.
-/// It is tall, so [`wordmark`] only returns it when the pane can spare the
-/// rows; the block-capital form below is the fallback, not a lesser variant.
+/// This is the canonical block form supplied by the project. The open gaps in
+/// the first, second, sixth, and seventh rows are part of the mark; keeping the
+/// rows literal makes accidental proportion changes obvious in review.
 const LOGO: &[&str] = &[
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⣀⣀⣀⣀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣶⣿⣿⣿⣿⣿⣿⣿⣿⣿⡉⠙⣻⣷⣶⣤⣀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⣼⣿⣿⣿⡿⠋⠀⠀⠀⠀⢹⣿⣿⡟⠉⠉⠉⢻⡿⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠰⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀⣿⣿⣇⠀⠀⠀⠈⠇⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⢿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠉⠛⠿⣷⣤⡤⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣿⣿⣿⣿⣿⣶⣦⣤⣤⣀⣀⣀⡀⠉⠀⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠙⠻⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣦⡀⠀⠀⠀⠀",
-    "⠀⠀⠀⢀⣀⣤⣄⣀⠀⠀⠀⠀⠀⠀⠀⠉⠉⠙⠛⠿⣿⣿⣿⣿⣿⣿⣦⠀⠀⠀",
-    "⠀⠀⣰⣿⣿⣿⣿⣿⣷⣤⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⢿⣿⣿⣿⣿⣧⠀⠀",
-    "⠀⠀⣿⣿⣿⠁⠀⠈⠙⢿⣿⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⠀⠀",
-    "⠀⠀⢿⣿⣿⣆⠀⠀⠀⠀⠈⠛⠿⣿⣶⣦⡤⠴⠀⠀⠀⠀⠀⣸⣿⣿⣿⡿⠀⠀",
-    "⠀⠀⠈⢿⣿⣿⣷⣄⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⠃⠀⠀",
-    "⠀⠀⠀⠀⠙⢿⣿⣿⣿⣶⣦⣤⣀⣀⡀⠀⠀⠀⣀⣠⣴⣾⣿⣿⣿⡿⠃⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠈⠙⠻⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡿⠟⠋⠀⠀⠀⠀⠀",
-    "⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠉⠙⠛⠛⠛⠛⠛⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀",
+    "██████ █████ ████████",
+    "██████ █████ ████████",
+    "█████████████████████",
+    "█████████████████████",
+    "█████████████████████",
+    "██████ █████ ████████",
+    "██████ █████ ████████",
 ];
 
 /// Wordmark, block-capital style. 52 columns.
@@ -68,8 +58,6 @@ const WORDMARK_ASCII: &[&str] = &[
     " \\___/ \\____| |_/_/   \\_\\_| \\_|_____|",
 ];
 
-
-
 /// Draw the banner, animating if the terminal will show it.
 ///
 /// `animate` should be false when output is piped, when `TERM=dumb`, or when the
@@ -83,16 +71,16 @@ const WORDMARK_ASCII: &[&str] = &[
 pub fn wordmark(width: u16, height: u16, ascii: bool) -> &'static [&'static str] {
     const NARROW: &[&str] = &[WORDMARK_NARROW];
 
-    // Braille has no ASCII equivalent, so a terminal without dependable
+    // The canonical mark uses full-block cells. A terminal without dependable
     // Unicode gets the letterforms regardless of how much room it has.
     if ascii {
         return if width >= 40 { WORDMARK_ASCII } else { NARROW };
     }
 
-    // The snake is the primary mark. It only earns its rows if the hints below
-    // it still fit; on a short screen the horizontal wordmark preserves room
-    // for the controls.
-    if width >= 34 && height >= 27 {
+    // The project mark is the primary identity. Seven rows plus the controls
+    // below need seventeen rows; on a shorter screen the horizontal wordmark
+    // preserves room for the controls.
+    if width >= 25 && height >= 17 {
         return LOGO;
     }
     if width >= 56 {
@@ -158,7 +146,10 @@ pub fn empty_state_lines<'a>(
     if width >= 40 {
         lines.push(Line::default());
         lines.push(Line::styled(
-            format!("  {}", glyphs.rule((width as usize).min(58).saturating_sub(2))),
+            format!(
+                "  {}",
+                glyphs.rule((width as usize).min(58).saturating_sub(2))
+            ),
             theme.dim(),
         ));
     }
@@ -199,7 +190,14 @@ fn shorten_path(path: &str, room: usize, ellipsis: &str) -> String {
     if kept.is_empty() {
         // Not even the basename fits; show its tail rather than nothing.
         let basename = path.rsplit('/').next().unwrap_or(&path);
-        return basename.chars().rev().take(room).collect::<Vec<_>>().into_iter().rev().collect();
+        return basename
+            .chars()
+            .rev()
+            .take(room)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
     }
     format!("{ellipsis}/{kept}")
 }
@@ -253,13 +251,16 @@ impl crate::component::Pane for Header<'_> {
         } else {
             // Too narrow for all three: the safety warning outranks the name,
             // because a session running unconfined must say so at any width.
-            let fallback = if right.is_empty() { left.to_string() } else { right.to_string() };
+            let fallback = if right.is_empty() {
+                left.to_string()
+            } else {
+                right.to_string()
+            };
             fallback.chars().take(width).collect()
         };
         Paragraph::new(signal)
             .style(theme.signal(signal_color))
             .render(signal_area, buf);
-
     }
 }
 
@@ -282,15 +283,15 @@ mod tests {
 
     #[test]
     fn a_narrow_terminal_gets_the_compact_mark() {
-        // The full wordmark is 52 columns; wrapping it is worse than not
+        // The full mark is 21 columns; wrapping it is worse than not
         // showing it, because a wrapped row reads as corruption.
-        assert_eq!(wordmark(40, 20, false), &[WORDMARK_NARROW]);
+        assert_eq!(wordmark(24, 20, false), &[WORDMARK_NARROW]);
         assert_eq!(wordmark(30, 20, true), &[WORDMARK_NARROW]);
     }
 
     #[test]
-    fn a_wide_terminal_gets_the_full_wordmark() {
-        assert_eq!(wordmark(100, 20, false), WORDMARK);
+    fn a_wide_but_short_terminal_gets_the_horizontal_wordmark() {
+        assert_eq!(wordmark(100, 16, false), WORDMARK);
         assert_eq!(wordmark(100, 20, true), WORDMARK_ASCII);
     }
 
@@ -304,33 +305,36 @@ mod tests {
     }
 
     #[test]
-    fn the_snake_only_appears_when_its_rows_are_affordable() {
-        // It is 15 rows. Taking them from a short pane pushes the key hints
+    fn the_logo_only_appears_when_its_rows_are_affordable() {
+        // It is seven rows. Taking them from a short pane pushes the key hints
         // below it off screen, which is the one thing the empty state is for.
-        assert_eq!(wordmark(100, 40, false), LOGO);
-        assert_ne!(wordmark(100, 24, false), LOGO, "a short pane keeps the hints");
-        assert_ne!(wordmark(30, 40, false), LOGO, "and a narrow one cannot fit it");
+        assert_eq!(wordmark(100, 20, false), LOGO);
+        assert_ne!(
+            wordmark(100, 16, false),
+            LOGO,
+            "a short pane keeps the hints"
+        );
+        assert_ne!(
+            wordmark(24, 40, false),
+            LOGO,
+            "and a narrow one cannot fit it"
+        );
     }
 
     #[test]
     fn the_logo_is_never_used_as_an_ascii_fallback() {
-        // Braille has no ASCII equivalent, so a terminal without dependable
+        // Full blocks have no ASCII equivalent, so a terminal without dependable
         // Unicode gets letterforms however much room it has.
         assert_ne!(wordmark(100, 60, true), LOGO);
     }
 
     #[test]
     fn every_logo_cell_is_one_column() {
-        // Braille is East Asian Width Neutral across the whole block, which is
-        // why it is on the safe list. Asserted rather than assumed, because a
-        // double-width cell here would shear the whole picture.
+        // The mark deliberately contains only full blocks and spaces. A stray
+        // glyph can change its proportions or render at a different width.
         for row in LOGO {
             for ch in row.chars() {
-                assert!(
-                    (0x2800..=0x28ff).contains(&(ch as u32)),
-                    "{ch:?} (U+{:04X}) is outside the braille block",
-                    ch as u32
-                );
+                assert!(matches!(ch, '█' | ' '), "unexpected logo cell {ch:?}");
             }
         }
     }
